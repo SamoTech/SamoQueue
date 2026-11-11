@@ -76,6 +76,29 @@ def init_db():
             actor TEXT NOT NULL, operation TEXT NOT NULL,
             entity_id TEXT NOT NULL, details TEXT NOT NULL DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS recordings (
+            id TEXT PRIMARY KEY, source TEXT NOT NULL, external_call_id TEXT NOT NULL,
+            call_id TEXT NOT NULL REFERENCES calls(id), original_name TEXT NOT NULL,
+            mime_type TEXT NOT NULL, file_path TEXT NOT NULL, bytes INTEGER NOT NULL,
+            sha256 TEXT NOT NULL, recorded_at REAL NOT NULL, duration_seconds REAL,
+            consent_attested INTEGER NOT NULL, created_at REAL NOT NULL,
+            UNIQUE(source, external_call_id, sha256)
+        );
+        CREATE INDEX IF NOT EXISTS idx_recordings_call ON recordings(call_id,recorded_at);
+        CREATE TABLE IF NOT EXISTS monitor_sessions (
+            id TEXT PRIMARY KEY, call_id TEXT NOT NULL REFERENCES calls(id),
+            target_station TEXT NOT NULL, created_by TEXT NOT NULL,
+            state TEXT NOT NULL, created_at REAL NOT NULL, approved_at REAL,
+            leased_at REAL, active_at REAL, stopped_at REAL,
+            result_code TEXT, result_message TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_monitor_sessions_state ON monitor_sessions(state, created_at);
+        CREATE TABLE IF NOT EXISTS ivr_flows (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+            graph TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', version INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT NOT NULL, updated_by TEXT NOT NULL,
+            created_at REAL NOT NULL, updated_at REAL NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS aura_routing_plans (
             id TEXT PRIMARY KEY, queue_id TEXT NOT NULL REFERENCES queues(id),
             change_type TEXT NOT NULL, desired TEXT NOT NULL,
