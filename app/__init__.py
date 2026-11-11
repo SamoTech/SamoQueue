@@ -1,0 +1,1 @@
+"""Call Queue Control application."""

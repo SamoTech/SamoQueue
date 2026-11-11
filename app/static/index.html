@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0c1020"><title>QueuePilot | Contact Center Operations</title>
+<link rel="stylesheet" href="/static/styles.css"></head>
+<body>
+<div id="login" class="login-layer">
+  <form id="loginForm" class="login-card">
+    <div class="brand-mark large">Q<span>↗</span></div>
+    <div class="eyebrow">CONTACT CENTER OPERATIONS</div>
+    <h1>Welcome back</h1><p>Sign in to your supervisor workspace.</p>
+    <label for="username">Username</label><input id="username" value="admin" autocomplete="username" required>
+    <label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required>
+    <div id="loginError" class="error" role="alert"></div>
+    <button class="primary wide" type="submit">Sign in <span>→</span></button>
+    <div class="login-footer">Protected supervisor access · Avaya-ready integration</div>
+  </form>
+</div>
+<div class="layout" id="app" hidden>
+  <aside class="sidebar">
+    <div class="side-brand"><div class="brand-mark">Q<span>↗</span></div><div><strong>QueuePilot</strong><small>OPERATIONS CONSOLE</small></div></div>
+    <div class="side-label">WORKSPACE</div>
+    <nav id="menu">
+      <button class="nav-link active" data-page="overview"><span class="nav-icon">◫</span> Overview</button>
+      <button class="nav-link" data-page="calls"><span class="nav-icon">◉</span> Live calls</button>
+      <button class="nav-link" data-page="agents"><span class="nav-icon">♙</span> Agent management</button>
+      <button class="nav-link" data-page="reports"><span class="nav-icon">▥</span> Reports</button>
+      <button class="nav-link" data-page="aura"><span class="nav-icon">◇</span> Avaya Aura control</button>
+      <button class="nav-link" data-page="settings"><span class="nav-icon">⚙</span> Configuration</button>
+    </nav>
+    <div class="side-bottom"><div class="monitor-icon">◈</div><strong>Integration gateway</strong>
+      <p>Normalized Avaya event ingestion is enabled. Live connection verification requires a CTI bridge.</p>
+      <div id="sideConnection" class="integration-state">● No CTI heartbeat</div>
+    </div>
+    <button class="logout" id="logout">↪ <span>Sign out</span></button>
+  </aside>
+  <main class="main">
+    <header class="header"><div class="head-left"><button id="mobileMenu" class="mobile-menu">☰</button><div class="breadcrumb">Workspace <span>/</span> <strong id="crumb">Overview</strong></div></div>
+      <div class="head-actions"><div id="liveIndicator" class="live-chip"><span class="pulse"></span> Dashboard refreshing</div><span class="header-time" id="clock">--:--</span><div class="avatar" title="Supervisor">SP</div></div>
+    </header>
+    <div class="content">
+      <section id="page-overview" class="page">
+        <div class="page-top"><div><div class="eyebrow purple">REAL-TIME COMMAND CENTER</div><h1>Operations overview<span class="dot">.</span></h1><p>One view of queue performance, traffic and agent availability.</p></div>
+          <div class="top-actions"><button class="ghost" id="refreshBtn">⟳ &nbsp;Refresh</button><button class="primary demo-action" id="demoStepTop">▶ Simulate event</button></div></div>
+        <div id="demoBanner" class="demo-banner">◈ &nbsp;<strong>Demo environment</strong>&nbsp; · Sample call events only. No live PBX connection is active. &nbsp; <button id="seedDemoBtn" class="small-button" type="button">Load demo data</button></div>
+        <div class="stat-grid" id="statGrid"></div>
+        <div class="two-columns">
+          <div class="panel"><div class="panel-head"><div><h2>Traffic overview</h2><p>Answered and abandoned calls · last 7 UTC dates</p></div><span class="subtle-label">7 DAYS</span></div>
+            <div class="chart-wrap"><div class="chart-legend"><span><i class="legend-purple"></i> Answered</span><span><i class="legend-amber"></i> Abandoned</span></div><div id="trafficChart" class="chart"></div></div></div>
+          <div class="panel agent-availability"><div class="panel-head"><div><h2>Agent availability</h2><p>Current status distribution</p></div><span class="subtle-label">LIVE SNAPSHOT</span></div><div class="availability-layout"><div id="donut" class="donut"><div><strong>0</strong><small>agents</small></div></div><div id="statusLegend" class="status-legend"></div></div></div>
+        </div>
+        <div class="panel"><div class="panel-head"><div><h2>Queue health</h2><p>Live queue load and service levels</p></div><button class="text-button" data-goto="calls">View live calls ↗</button></div><div class="table-scroll"><table><thead><tr><th>QUEUE / SKILL</th><th>WAITING</th><th>LONGEST WAIT</th><th>AVAILABLE</th><th>ANSWERED TODAY</th><th>SERVICE LEVEL</th><th>HEALTH</th></tr></thead><tbody id="queueRows"></tbody></table></div></div>
+      </section>
+      <section id="page-calls" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">CONTACT ACTIVITY</div><h1>Live calls<span class="dot">.</span></h1><p>Call lifecycle events and current queue positions.</p></div><div class="top-actions"><button class="primary demo-action" id="demoStepCalls">▶ Simulate event</button></div></div>
+        <div class="mini-stats" id="callMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Call activity</h2><p>Recent inbound calls, newest first</p></div><select id="callFilter" aria-label="Filter calls"><option value="all">All statuses</option><option value="queued">Waiting</option><option value="answered">In progress</option><option value="completed">Completed</option><option value="abandoned">Abandoned</option></select></div>
+        <div class="table-scroll"><table><thead><tr><th>CALL ID</th><th>CALLER</th><th>QUEUE</th><th>STATUS</th><th>ARRIVAL</th><th>WAIT TIME</th><th>AGENT</th></tr></thead><tbody id="callRows"></tbody></table></div></div>
+        <div class="small-note">Call IDs are scoped to the upstream event source. Caller numbers are masked on ingestion.</div></section>
+      <section id="page-agents" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">PEOPLE & CAPACITY</div><h1>Agent management<span class="dot">.</span></h1><p>Track agent presence and team distribution.</p></div><button class="primary" id="newAgentBtn">+ Add agent</button></div>
+        <div class="mini-stats" id="agentMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Agent directory</h2><p>Manual status edits affect this dashboard only, not Avaya</p></div></div><div class="table-scroll"><table><thead><tr><th>AGENT</th><th>EXTENSION</th><th>ASSIGNED QUEUE</th><th>STATUS</th><th>LAST CHANGE</th><th>LOCAL EDIT</th></tr></thead><tbody id="agentRows"></tbody></table></div></div></section>
+      <section id="page-reports" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">PERFORMANCE INSIGHTS</div><h1>Reports & analytics<span class="dot">.</span></h1><p>Operational summary with a downloadable call-level export.</p></div><button class="primary" id="exportBtn">↓ Export CSV</button></div>
+        <div class="mini-stats" id="reportMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Queue performance</h2><p>Today's performance in the configured local timezone</p></div></div><div class="table-scroll"><table><thead><tr><th>QUEUE</th><th>ANSWERED</th><th>ABANDONED</th><th>AVG ANSWER WAIT</th><th>SLA ACTUAL</th><th>SLA TARGET</th></tr></thead><tbody id="reportRows"></tbody></table></div></div><p class="small-note">MVP SLA = answered within each queue threshold / (answered + abandoned); unanswered active calls are excluded. This must be reconciled with your Avaya CMS reporting definition before production.</p></section>
+      <section id="page-aura" class="page" hidden>
+        <div class="page-top"><div><div class="eyebrow purple">AES / COMMUNICATION MANAGER</div>
+          <h1>Avaya Aura operations<span class="dot">.</span></h1>
+          <p>Map PBX resources, review call-control requests, and prepare safe routing changes.</p></div>
+          <button id="auraRefresh" class="ghost">⟳ Refresh integration</button></div>
+        <div class="demo-banner" style="display:block">⚠ <strong>Integration gateway only.</strong>
+          PBX call control needs a licensed AES bridge and explicit enablement. Routing proposals never alter the PBX automatically.</div>
+        <div id="auraReadiness" class="mini-stats"></div>
+        <div class="two-columns">
+          <div class="panel"><div class="panel-head"><div><h2>VDN / skill mapping</h2><p>Link each QueuePilot queue to the real CM VDN and/or hunt group</p></div></div>
+            <div id="auraQueueBindings" class="queue-settings"></div></div>
+          <div class="panel"><div class="panel-head"><div><h2>Station / agent mapping</h2><p>Explicit mapping required for call control and agent-state events</p></div></div>
+            <div id="auraAgentBindings" class="queue-settings"></div></div>
+        </div>
+        <div class="two-columns">
+          <div class="panel"><div class="panel-head"><div><h2>Request PBX call control</h2><p>All requests require approval. Internal dialling only.</p></div></div>
+            <form id="auraCommandForm" class="aura-form">
+              <label>Action <select name="action" id="auraAction" required>
+                <option value="call.make">Make call</option><option value="call.answer">Answer</option>
+                <option value="call.hold">Hold</option><option value="call.retrieve">Retrieve</option>
+                <option value="call.transfer">Transfer</option><option value="call.drop">Disconnect</option>
+                <option value="agent.ready">Agent ready</option><option value="agent.aux">Agent AUX</option>
+              </select></label>
+              <label>Mapped station <select name="station" id="auraStation" required></select></label>
+              <label>PBX call ID (not needed for make call/agent state)
+                <input name="call_id" placeholder="From AES monitor event"></label>
+              <label>Internal destination (make call/transfer)
+                <input name="destination" placeholder="e.g. 4102" inputmode="numeric"></label>
+              <button type="submit" class="primary">Create approval request</button>
+            </form>
+          </div>
+          <div class="panel"><div class="panel-head"><div><h2>Routing change proposal</h2><p>Controlled planning only; AES SMS deployment is not yet enabled</p></div></div>
+            <form id="auraPlanForm" class="aura-form">
+              <label>Queue <select name="queue_id" id="auraPlanQueue" required></select></label>
+              <label>Change type <select name="change_type"><option value="vdn_destination">VDN destination</option>
+                <option value="vector_steps">Vector steps</option><option value="skill_membership">Skill membership</option>
+                <option value="hours_of_operation">Business hours</option></select></label>
+              <label>Requested change <textarea name="desired" rows="2" minlength="4" maxlength="1000" required></textarea></label>
+              <label>Business reason <textarea name="reason" rows="2" minlength="8" maxlength="500" required></textarea></label>
+              <button type="submit" class="ghost">Save routing proposal</button>
+            </form>
+          </div>
+        </div>
+        <div class="panel"><div class="panel-head"><div><h2>Call-control requests</h2>
+          <p>Only a licensed external CTI bridge can acknowledge execution</p></div></div>
+          <div class="table-scroll"><table><thead><tr><th>REQUEST</th><th>ACTION</th><th>STATION</th><th>DESTINATION</th><th>STATUS</th><th>RESULT</th><th>APPROVAL</th></tr></thead>
+          <tbody id="auraCommands"></tbody></table></div></div>
+        <div class="panel"><div class="panel-head"><div><h2>Change advisory</h2><p>Configuration proposals awaiting review by an Avaya administrator</p></div></div>
+          <div id="auraPlans" class="queue-settings"></div></div>
+      </section>
+      <section id="page-settings" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">SYSTEM ADMINISTRATION</div><h1>Configuration<span class="dot">.</span></h1><p>Queue thresholds, source mapping, and integration readiness.</p></div><button class="primary" id="newQueueBtn">+ Create queue</button></div>
+        <div class="settings-grid"><div class="panel"><div class="panel-head"><div><h2>Queue configuration</h2><p>Manage local queue IDs and SLA targets</p></div></div><div id="queueSettings" class="queue-settings"></div></div>
+          <div class="panel"><div class="panel-head"><div><h2>Avaya integration</h2><p>Connector diagnostics</p></div></div>
+            <div class="diag-row"><span>Ingestion API</span><strong class="good">Ready</strong></div>
+            <div class="diag-row"><span>Provider</span><strong id="provider">Not configured</strong></div>
+            <div class="diag-row"><span>Last event received</span><strong id="lastEvent">Never</strong></div>
+            <div class="diag-row"><span>CTI session reported active</span><strong class="warning">No</strong></div>
+            <div class="diag-row"><span>Mode</span><strong id="appMode">--</strong></div>
+            <div class="hint">An Avaya connector must map vendor-specific events to <code>POST /api/integrations/events</code> with its integration API key. Consult <code>AVAYA_INTEGRATION.md</code> in the project.</div>
+          </div></div></section>
+    </div>
+  </main>
+</div>
+<dialog id="modal"><form id="modalForm"><div class="modal-head"><h2 id="modalTitle">New record</h2><button type="button" class="close" id="closeModal">×</button></div><div id="modalFields"></div><div id="modalError" class="error"></div><div class="modal-actions"><button type="button" class="ghost" id="cancelModal">Cancel</button><button type="submit" class="primary">Save changes</button></div></form></dialog>
+<div id="toast" class="toast" role="status"></div>
+<script src="/static/app.js" defer></script></body></html>
