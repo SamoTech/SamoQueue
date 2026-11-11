@@ -4,3 +4,9 @@ __pycache__/
 .pytest_cache/
 data/
 *.pyc
+
+# Native SIP local configuration, media and credentials
+telephony/native_switch.local.json
+*.wav
+*.pcap
+*.pcapng

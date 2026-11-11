@@ -1,4 +1,4 @@
-# QueuePilot v0.5 — native SIP call center (no external PBX/media engine)
+# QueuePilot v0.6 — native SIP call center (no external PBX/media engine)
 
 ## Corrected requirement
 
@@ -47,18 +47,18 @@ The physical LAN/VLAN may be the same. SIP traffic still requires agreed transpo
 
 Signaling alone will NOT record or let the supervisor listen. QueuePilot must anchor RTP between the Avaya trunk and phone: receive, timestamp/jitter-buffer, optionally transcode, generate hold/IVR media, bridge channels, write recordings, and mix supervisor audio under authorization. A SIP `302` redirect/`REFER` or a direct Avaya-to-phone RTP bypass cannot satisfy QueuePilot-managed recording and monitoring.
 
-### Capability implementation and status (v0.5 foundation)
+### Capability implementation and status (v0.6 lab milestone)
 
 | System component | Status | Production dependency |
 |---|---|---|
 | ACD skill/priority selection | Tested in-memory model | Durable calls and scheduler |
 | Trusted Avaya peer → DID → queue decision | Implemented in `telephony/native_sip.py` | Authenticate real SIP transport/session |
-| Authorized phone LAN contact → SIP dial intent | Implemented in-memory | SIP registrar/digest auth, persistence, liveness |
+| Approved phone → independent SIP dial intent | Implemented in-memory | Persistence, TLS, heartbeat and re-registration |
 | Native UDP SIP OPTIONS probe | Implemented **LAB ONLY** | Do not put live inbound calls on this listener |
-| SIP INVITE/B2BUA dialogs and transactions | **Not implemented** | Complete SIP server stack, retransmits/timers/forking/cancel |
-| Phone REGISTER and authentication | **Not implemented** | SIP digest/TLS, expiry, replay prevention and device compatibility |
-| RTP bridging, media anchor, hold/IVR audio | **Not implemented** | Media engine with codec/SDP/DTMF/jitter handling |
-| Real call recording / supervisor listening | **Not implemented** | Media capture/mixer, access controls, legal compliance |
+| SIP INVITE, ACK, BYE, CANCEL two-leg signaling | **Lab flow implemented** (`telephony/native_switch.py`) | Full RFC 3261 transactions, retransmissions and reliability |
+| Phone REGISTER and authentication | **Lab SHA-256 Digest and expiry implemented** | TLS and physical Avaya phone interoperability |
+| RTP bridging / G.711 media anchor | **Two-way lab relay implemented** | SRTP, RTCP, jitter handling, DTMF and IVR prompts |
+| Per-leg diagnostic WAV / supervisor live listening | **Lab WAV optional (off); live listening NOT connected** | Consent policy, authorized supervisor mixer and playback integration |
 | Reporting | Existing dashboard/exports prototype | Events from native SIP/RTP sessions, production DB |
 | High availability | **Not implemented** | Node failover, replication, redundant trunk route |
 
@@ -73,7 +73,7 @@ Signaling alone will NOT record or let the supervisor listen. QueuePilot must an
 7. Reports: own-source event stream + interaction CDRs + recording metadata + agent states, with CSV, XLSX, PDF and dashboards; authoritative only when SIP/RTP events are in production.
 8. Operations: PostgreSQL, retention, disk quotas, time sync, backups, HA, scaling, disaster recovery, RBAC, audit log, load/security and interoperability test matrix.
 
-### Earliest safe lab acceptance
+### Lab milestone / next acceptance
 
 - A standards-compliant softphone/deskphone successfully authenticates/registers to QueuePilot itself.
 - A simulated SIP trunk sends an INVITE to QueuePilot (without Avaya), and then Avaya test SIP trunk delivers an equivalent call.
@@ -82,7 +82,7 @@ Signaling alone will NOT record or let the supervisor listen. QueuePilot must an
 - No Asterisk/FreeSWITCH installation/service exists in the deployment.
 - Failing the phone/QueuePilot/Avaya link does not corrupt state or leave untracked calls.
 
-### Lab-only probe command
+### Older lab-only OPTIONS probe
 
 ```
 python -m telephony.sip_probe

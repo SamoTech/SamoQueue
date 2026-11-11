@@ -1,0 +1,16 @@
+{
+  "listen_ip": "127.0.0.1",
+  "listen_port": 15060,
+  "advertised_ip": "127.0.0.1",
+  "avaya_peers": ["127.0.0.1/32"],
+  "phone_networks": ["127.0.0.1/32"],
+  "media_networks": ["127.0.0.1/32"],
+  "sip_realm": "queuepilot.local",
+  "nonce_secret": "REPLACE_WITH_A_RANDOM_64_CHARACTER_SECRET_BEFORE_STARTING",
+  "routes": [{"did": "6000", "queue": "support", "skills": ["english"], "priority": 0}],
+  "agents": {"agent-1": {"extension": "1001", "skills": ["english"]}},
+  "extension_passwords": {"1001": "REPLACE_WITH_A_UNIQUE_STRONG_16_CHARACTER_SIP_PASSWORD"},
+  "offer_seconds": 20,
+  "record_calls": false,
+  "record_directory": "./data/lab-recordings"
+}

@@ -1,16 +1,71 @@
-# QueuePilot — Independent Native SIP Call Center (v0.5 foundation)
+# QueuePilot v0.6 — Independent Native SIP Lab Engine
 
-> **Corrected requirement (11 Nov 2026): no Asterisk, FreeSWITCH or independent telephony middleware.** Avaya Aura **only hands off incoming calls via SIP**. QueuePilot itself will own IP phone calls, IVR, agent ACD, RTP bridging, recordings, supervisor listening, reports, and administrative controls. See the **[native SIP architecture and compatibility requirements](docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md)**.
->
-> **Implementation status:** The standalone ACD rules, trusted SIP ingress routing policy, registered/provisioned phone location policy and isolated **lab-only** SIP OPTIONS probe are tested. The real SIP B2BUA, phone registrar/authentication and RTP media switch are **NOT YET IMPLEMENTED**. **Do not route live calls to this build.** A SIP-enabled IP phone is required; a phone that is H.323-only or locked to Avaya registration cannot be called independently without changing its endpoint setup.
+**Target:** Avaya Aura delivers an incoming call on an approved SIP trunk; QueuePilot
+manages its own queues, agent calls, IVR, media, recordings and reporting.
+**No Asterisk, FreeSWITCH or third-party PBX** is installed or required.
+The phone MUST be compatible with an independent SIP registrar (Avaya H.323-only
+firmware/stations are not supported by this SIP lab implementation).
 
-## Native SIP foundation
+## New operational lab path (v0.6)
 
-- `telephony/acd.py`: queue/agent scheduler, skills, priorities and offer/ACW timing.
-- `telephony/native_sip.py`: validates Avaya peer and DID mapping, authorized LAN phone contacts and SIP dial *intent* (not live origination).
-- `telephony/sip_probe.py`: local UDP OPTIONS compatibility probe on 127.0.0.1:15060 (explicitly rejects INVITEs; lab only).
-- `tests/test_native_sip.py`: signaling ingress/phone/ACD authorization and safety tests.
-- No Asterisk or FreeSWITCH runtime is part of the architecture. Historical v0.2/v0.3 Avaya control code below is legacy and not required for the target system.
+The `telephony/native_switch.py` service and its in-process helpers now handle:
+
+- A phone registering directly to QueuePilot using SIP `REGISTER` + SHA-256 Digest
+  authentication (nonce expiry, replay protection, restricted voice VLAN).
+- An authorized incoming `INVITE` from the configured Avaya SIP peer, DID-to-queue
+  lookup, independent ACD selection, and outgoing `INVITE` to the agent's phone.
+- Agent answer handling and separate SIP dialogs on both legs (lab subset),
+  with caller answer only after agent accepts.
+- Two-way G.711 RTP, **anchored inside QueuePilot**, with no direct caller/phone media bypass.
+- BYE/CANCEL handling, retrying a different eligible agent on rejection, and
+  after-call-work transitions.
+- Optional **per-leg diagnostic WAV** recording, explicitly OFF by default,
+  requiring lawful notice/consent before it is used with real callers.
+
+**Verified locally:** a simulated trunk and SIP phone register and establish a
+call, exchange G.711 RTP in both directions, and hang up with a coherent ACD state.
+`python -m pytest -q` covers the new lab flow plus existing app tests.
+
+### Lab-only start
+
+```bash
+cd avaya-queue-platform
+cp telephony/native_switch.example.json telephony/native_switch.local.json
+# Change ALL REPLACE_ placeholders to unique secrets before running.
+# Use loopback-only settings from the example in an isolated test machine.
+python -m telephony.native_switch --config telephony/native_switch.local.json --lab
+```
+
+In a **separate terminal**, the legacy dashboard runs with:
+
+```bash
+python setup_demo.py
+python run.py
+```
+
+**Integration limitation:** Native SIP call events are currently held in the
+engine's lab process and are not yet fed automatically to the reporting DB.
+The existing dashboard recording/monitoring and IVR editors remain separate
+application features, not connected to the live RTP core.
+
+### Do NOT point production Avaya trunks at this build
+
+This is a restricted **UDP IPv4/G.711 development implementation**, not a
+complete standards-certified or production-safe SIP switch. It lacks complete
+RFC 3261 transaction retransmission machinery, TLS/SRTP, resilient RTP/RTCP,
+DTMF-driven IVR playback, transfers/hold, supervisor mixing/whisper/barge,
+production recording controls, enterprise RBAC, failover, SIP extensions,
+durable state, actual Avaya-phone interoperability tests, and load/security
+validation. Unsupported transports and codecs fail closed.
+
+See [`docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md`](docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md)
+for the independent target architecture and compatibility constraints.
+
+The next production implementation milestone is a security-reviewed SIP
+transaction/dialog core and anchored media service with full call lifecycle,
+then IVR, supervisor media and high availability. Existing v0.2-v0.5
+connectors and demo controls are historical prototypes, not required
+intermediary PBXs.
 
 ---
 
