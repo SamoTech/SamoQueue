@@ -23,7 +23,7 @@ def decode_token(token: str) -> str:
             raise ValueError('Bad signature')
         raw = base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4))
         data = json.loads(raw)
-        if data.get('exp', 0) <= time.time() or data.get('sub') != config.admin_user:
+        if data.get('exp', 0) <= time.time() or data.get('sub') not in (config.admin_user,config.reviewer_user):
             raise ValueError('Expired or unknown user')
         return data['sub']
     except (ValueError, UnicodeError, KeyError, TypeError, json.JSONDecodeError):
@@ -33,7 +33,23 @@ def decode_token(token: str) -> str:
 def require_admin(authorization: str | None = Header(default=None)):
     if not authorization or not authorization.startswith('Bearer '):
         raise HTTPException(status_code=401, detail='Login required')
+    user = decode_token(authorization.removeprefix('Bearer ').strip())
+    if user != config.admin_user:
+        raise HTTPException(403, 'Administrator role required')
+    return user
+
+
+def require_supervisor(authorization: str | None = Header(default=None)):
+    if not authorization or not authorization.startswith('Bearer '):
+        raise HTTPException(401, 'Login required')
     return decode_token(authorization.removeprefix('Bearer ').strip())
+
+
+def require_reviewer(authorization: str | None = Header(default=None)):
+    user = require_supervisor(authorization)
+    if not config.reviewer_password or user != config.reviewer_user:
+        raise HTTPException(403, 'Separate reviewer role required')
+    return user
 
 
 def require_ingest(x_integration_key: str | None = Header(default=None)):
