@@ -14,9 +14,10 @@ from pydantic import BaseModel
 from .config import config, validate_config
 from .db import connection, init_db
 from .models import AgentIn, AgentStatusIn, AvayaEvent, ConnectorHeartbeat, Login, QueueIn
-from .security import encode_token, require_admin, require_ingest
+from .security import encode_token, require_admin, require_ingest, require_supervisor
 from .service import create_agent, create_queue, dashboard, ingest, seed_demo
 from .aura import router as aura_router
+from .contact_center import router as contact_center_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,9 +25,10 @@ async def lifespan(app: FastAPI):
     init_db()
     yield
 
-app = FastAPI(title='QueuePilot Aura Operations', version='0.2.0', lifespan=lifespan,
+app = FastAPI(title='QueuePilot Aura Operations', version='0.3.0', lifespan=lifespan,
               description='Avaya-ready supervisor application; PBX integration requires a vendor-specific bridge.')
 app.include_router(aura_router)
+app.include_router(contact_center_router)
 static_root = Path(__file__).parent / 'static'
 app.mount('/static', StaticFiles(directory=static_root), name='static')
 
@@ -36,7 +38,7 @@ def index():
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.2.0'}
+    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.3.0'}
 
 # Single administrator for development/MVP. Use enterprise SSO and proper RBAC in production.
 login_attempts = {}
@@ -47,17 +49,20 @@ def login(body: Login):
     failures = [t for t in login_attempts.get(body.username[:128], []) if t > now - 600]
     if len(failures) >= 8:
         raise HTTPException(429, 'Too many login attempts; retry later')
-    username_ok = hmac.compare_digest(body.username.encode(), config.admin_user.encode())
-    password_ok = hmac.compare_digest(body.password.encode(), config.admin_password.encode())
-    if not (username_ok and password_ok):
+    is_admin = (hmac.compare_digest(body.username.encode(), config.admin_user.encode())
+                and hmac.compare_digest(body.password.encode(), config.admin_password.encode()))
+    is_reviewer = (len(config.reviewer_password) >= 12
+                   and hmac.compare_digest(body.username.encode(), config.reviewer_user.encode())
+                   and hmac.compare_digest(body.password.encode(), config.reviewer_password.encode()))
+    if not (is_admin or is_reviewer):
         failures.append(now)
         login_attempts[body.username[:128]] = failures
         raise HTTPException(401, 'Invalid credentials')
     login_attempts.pop(body.username[:128], None)
-    return {'token': encode_token(body.username), 'expires_in': 28800, 'user': body.username}
+    return {'token': encode_token(body.username), 'expires_in': 28800, 'user': body.username, 'role': 'admin' if is_admin else 'reviewer'}
 
 @app.get('/api/dashboard')
-def overview(_=Depends(require_admin)):
+def overview(_=Depends(require_supervisor)):
     return dashboard()
 
 @app.post('/api/queues', status_code=201)
