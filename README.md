@@ -95,3 +95,16 @@ pytest -q
 For **Aura/Communication Manager**, start with `AURA_DEPLOYMENT.md`. `AVAYA_INTEGRATION.md` contains general vendor-neutral ingestion notes.
 
 The test suite includes bridge transport, mapping, approvals, idempotency, unauthorized claims and routing advisory checks.
+
+## QueuePilot v0.3 — media, supervision, IVR drafts and reports
+
+The **Contact Center** upgrade adds a recording library with authenticated upload/playback; a dedicated reviewer and audited monitoring workflow; a secure WebSocket PCM relay for an *external authorized* Avaya DMCC media bridge; validated IVR graph drafts and non-executing deployment proposals; and CSV/JSON/ZIP exports across ten operational report categories.
+
+**No real-time recording, DMCC media capture, browser live listening, or IVR deployment operates against Avaya without a licensed and configured external bridge**. These are integration points, not an Avaya-native recording engine. Read [`AURA_MEDIA_DEPLOYMENT.md`](AURA_MEDIA_DEPLOYMENT.md) before enabling any audio or monitoring feature. All audio-related flags default to disabled.
+
+### v0.3 testing
+
+```bash
+python -m pytest -q
+node --check app/static/app.js
+```
