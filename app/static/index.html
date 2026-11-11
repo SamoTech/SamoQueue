@@ -23,6 +23,9 @@
       <button class="nav-link active" data-page="overview"><span class="nav-icon">◫</span> Overview</button>
       <button class="nav-link" data-page="calls"><span class="nav-icon">◉</span> Live calls</button>
       <button class="nav-link" data-page="agents"><span class="nav-icon">♙</span> Agent management</button>
+      <button class="nav-link" data-page="recordings"><span class="nav-icon">♫</span> Recordings</button>
+      <button class="nav-link" data-page="monitor"><span class="nav-icon">◉</span> Live listening</button>
+      <button class="nav-link" data-page="ivr"><span class="nav-icon">⌘</span> IVR designer</button>
       <button class="nav-link" data-page="reports"><span class="nav-icon">▥</span> Reports</button>
       <button class="nav-link" data-page="aura"><span class="nav-icon">◇</span> Avaya Aura control</button>
       <button class="nav-link" data-page="settings"><span class="nav-icon">⚙</span> Configuration</button>
@@ -52,12 +55,65 @@
       </section>
       <section id="page-calls" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">CONTACT ACTIVITY</div><h1>Live calls<span class="dot">.</span></h1><p>Call lifecycle events and current queue positions.</p></div><div class="top-actions"><button class="primary demo-action" id="demoStepCalls">▶ Simulate event</button></div></div>
         <div class="mini-stats" id="callMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Call activity</h2><p>Recent inbound calls, newest first</p></div><select id="callFilter" aria-label="Filter calls"><option value="all">All statuses</option><option value="queued">Waiting</option><option value="answered">In progress</option><option value="completed">Completed</option><option value="abandoned">Abandoned</option></select></div>
-        <div class="table-scroll"><table><thead><tr><th>CALL ID</th><th>CALLER</th><th>QUEUE</th><th>STATUS</th><th>ARRIVAL</th><th>WAIT TIME</th><th>AGENT</th></tr></thead><tbody id="callRows"></tbody></table></div></div>
+        <div class="table-scroll"><table><thead><tr><th>CALL ID</th><th>CALLER</th><th>QUEUE</th><th>STATUS</th><th>ARRIVAL</th><th>WAIT TIME</th><th>AGENT</th><th>SUPERVISOR</th></tr></thead><tbody id="callRows"></tbody></table></div></div>
         <div class="small-note">Call IDs are scoped to the upstream event source. Caller numbers are masked on ingestion.</div></section>
       <section id="page-agents" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">PEOPLE & CAPACITY</div><h1>Agent management<span class="dot">.</span></h1><p>Track agent presence and team distribution.</p></div><button class="primary" id="newAgentBtn">+ Add agent</button></div>
         <div class="mini-stats" id="agentMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Agent directory</h2><p>Manual status edits affect this dashboard only, not Avaya</p></div></div><div class="table-scroll"><table><thead><tr><th>AGENT</th><th>EXTENSION</th><th>ASSIGNED QUEUE</th><th>STATUS</th><th>LAST CHANGE</th><th>LOCAL EDIT</th></tr></thead><tbody id="agentRows"></tbody></table></div></div></section>
-      <section id="page-reports" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">PERFORMANCE INSIGHTS</div><h1>Reports & analytics<span class="dot">.</span></h1><p>Operational summary with a downloadable call-level export.</p></div><button class="primary" id="exportBtn">↓ Export CSV</button></div>
-        <div class="mini-stats" id="reportMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Queue performance</h2><p>Today's performance in the configured local timezone</p></div></div><div class="table-scroll"><table><thead><tr><th>QUEUE</th><th>ANSWERED</th><th>ABANDONED</th><th>AVG ANSWER WAIT</th><th>SLA ACTUAL</th><th>SLA TARGET</th></tr></thead><tbody id="reportRows"></tbody></table></div></div><p class="small-note">MVP SLA = answered within each queue threshold / (answered + abandoned); unanswered active calls are excluded. This must be reconciled with your Avaya CMS reporting definition before production.</p></section>
+      <section id="page-recordings" class="page" hidden>
+        <div class="page-top"><div><div class="eyebrow purple">QUALITY & COMPLIANCE</div><h1>Call recordings<span class="dot">.</span></h1>
+          <p>Find and play captured calls. Recordings are uploaded by an authorized Avaya recorder.</p></div>
+          <button id="reloadRecordings" class="ghost">⟳ Refresh</button></div>
+        <div class="demo-banner" style="display:block">A licensed DMCC or existing recorder must supply the audio. No native PBX RTP capture is included in QueuePilot.</div>
+        <div class="panel"><div class="panel-head"><div><h2>Recording library</h2><p>Supervisor playback and downloads are audited</p></div></div>
+          <div class="table-scroll"><table><thead><tr><th>RECORDED</th><th>CALL</th><th>QUEUE</th><th>AGENT</th><th>DURATION</th><th>SIZE</th><th>ACTIONS</th></tr></thead>
+             <tbody id="recordingRows"></tbody></table></div>
+          <div id="recordingPlayerWrap" hidden class="audio-bar"><strong id="nowPlaying">Recording</strong><audio id="recordingPlayer" controls preload="none"></audio></div>
+        </div>
+      </section>
+      <section id="page-monitor" class="page" hidden>
+        <div class="page-top"><div><div class="eyebrow purple">SUPERVISOR QUALITY</div><h1>Live listening<span class="dot">.</span></h1>
+         <p>Authorized supervision with separate approval and an on-premises DMCC media bridge.</p></div>
+         <button id="reloadMonitoring" class="ghost">⟳ Refresh</button></div>
+        <div class="demo-banner" style="display:block">Monitoring is disabled until a dedicated reviewer, authorized DMCC observer, and secure PCM bridge are configured. No monitoring happens without approval.</div>
+        <div class="panel"><div class="panel-head"><div><h2>Listen requests</h2><p>Administrator requests; separate reviewer approves; the Avaya bridge starts Service Observing</p></div></div>
+          <div class="table-scroll"><table><thead><tr><th>CALL</th><th>AGENT</th><th>STATION</th><th>REQUESTED</th><th>STATE</th><th>ACTIONS</th></tr></thead>
+             <tbody id="monitorRows"></tbody></table></div>
+          <div class="audio-bar" id="livePlayerWrap" hidden><strong>Authorized live audio</strong>
+            <span class="small-note" id="liveAudioState">Not connected</span>
+            <button class="ghost" id="disconnectLive">Stop browser playback</button></div>
+        </div>
+      </section>
+      <section id="page-ivr" class="page" hidden>
+        <div class="page-top"><div><div class="eyebrow purple">CUSTOMER JOURNEYS</div><h1>IVR designer<span class="dot">.</span></h1>
+         <p>Design and validate DTMF menus, announcements, queue routing, transfers and hangups.</p></div>
+         <button id="reloadIvr" class="ghost">⟳ Refresh</button></div>
+        <div class="demo-banner" style="display:block">Design and review only: deploying Communication Manager vectors or Experience Portal applications requires a release-specific adapter and change approval.</div>
+        <div class="two-columns"><div class="panel"><div class="panel-head"><div><h2>Saved IVR flows</h2><p>Versions and deployment proposal status</p></div></div>
+            <div id="ivrFlowList" class="queue-settings"></div></div>
+          <div class="panel"><div class="panel-head"><div><h2>Graph editor</h2><p>Validatable structured flow definition; terminal destinations must exist</p></div></div>
+            <form id="ivrForm" class="aura-form">
+              <label>Flow name <input name="name" id="ivrName" required minlength="3" maxlength="100" placeholder="Main greeting"></label>
+              <label>Description <input name="description" id="ivrDescription" maxlength="500" placeholder="Weekday customer menu"></label>
+              <label>Graph (JSON)<textarea id="ivrGraph" rows="13" spellcheck="false" required></textarea></label>
+              <div class="top-actions"><button type="button" class="ghost" id="ivrSample">Load example</button>
+                <button type="submit" class="primary">Save draft</button></div>
+              <span class="small-note">Saving a draft never alters Avaya routing or plays any audio.</span>
+            </form>
+          </div></div>
+      </section>
+      <section id="page-reports" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">PERFORMANCE INSIGHTS</div><h1>Reports & analytics<span class="dot">.</span></h1><p>Download detailed call, queue, agent, SLA, half-hourly, recording, monitoring, IVR, event and audit reports.</p></div><button class="primary" id="exportBtn">↓ Export CSV</button></div>
+        <div class="panel"><div class="panel-head"><div><h2>Report exporter</h2><p>CSV (Excel-compatible), JSON, or a ZIP containing all reports</p></div></div>
+          <form id="reportExportForm" class="aura-form">
+            <label>Report <select id="reportType"><option value="calls">Call detail</option><option value="queues">Queue summary</option>
+            <option value="agents">Agent performance</option><option value="intervals">30-minute traffic</option><option value="sla">SLA</option>
+            <option value="recordings">Recording inventory</option><option value="monitoring">Monitoring audit</option>
+            <option value="ivr">IVR versions</option><option value="audit">Control audit</option><option value="events">CTI event log</option></select></label>
+            <label>From <input id="reportFrom" type="datetime-local"></label>
+            <label>To <input id="reportTo" type="datetime-local"></label>
+            <div class="top-actions"><button type="button" class="ghost" id="exportSelectedCsv">Download selected CSV</button>
+              <button type="button" class="ghost" id="exportSelectedJson">Download JSON</button>
+              <button type="button" class="primary" id="exportAll">Download all (ZIP)</button></div>
+          </form></div><div class="mini-stats" id="reportMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Queue performance</h2><p>Today's performance in the configured local timezone</p></div></div><div class="table-scroll"><table><thead><tr><th>QUEUE</th><th>ANSWERED</th><th>ABANDONED</th><th>AVG ANSWER WAIT</th><th>SLA ACTUAL</th><th>SLA TARGET</th></tr></thead><tbody id="reportRows"></tbody></table></div></div><p class="small-note">MVP SLA = answered within each queue threshold / (answered + abandoned); unanswered active calls are excluded. This must be reconciled with your Avaya CMS reporting definition before production.</p></section>
       <section id="page-aura" class="page" hidden>
         <div class="page-top"><div><div class="eyebrow purple">AES / COMMUNICATION MANAGER</div>
           <h1>Avaya Aura operations<span class="dot">.</span></h1>
