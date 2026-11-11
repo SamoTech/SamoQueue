@@ -1,3 +1,7 @@
+> **Architecture change — independent QueuePilot ACD (v0.4 foundation, 11 Nov 2026).**  
+> The target architecture is now **Avaya SIP call handoff only**. QueuePilot must own IVR, queueing, agents, call media, recording, live monitoring and reports. See [`docs/INDEPENDENT_CONTACT_CENTER_ARCHITECTURE.md`](docs/INDEPENDENT_CONTACT_CENTER_ARCHITECTURE.md).  
+> The v0.2/v0.3 CTI/Avaya operations modules remain transitional legacy functionality; the new ACD module in `telephony/` is a **tested decision engine, not yet a live telephony switch**. Do not route live calls to it until the ARI controller and media plane have been commissioned.
+
 # QueuePilot v0.2 — Avaya Aura Operations Platform
 
 A runnable prototype of a call-center supervisor platform with **queue statistics, agent directory, polling, call events, SLA reporting, secured integration ingestion, Avaya Aura resource mapping, guarded command approval, routing proposals, audit trails and CSV exports**.
