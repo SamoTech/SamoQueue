@@ -25,8 +25,8 @@ async def lifespan(app: FastAPI):
     init_db()
     yield
 
-app = FastAPI(title='QueuePilot Aura Operations', version='0.3.0', lifespan=lifespan,
-              description='Avaya-ready supervisor application; PBX integration requires a vendor-specific bridge.')
+app = FastAPI(title='QueuePilot Independent Contact Center', version='0.5.0-foundation', lifespan=lifespan,
+              description='Standalone ACD/management prototype; native SIP call switching and RTP media are not yet operational.')
 app.include_router(aura_router)
 app.include_router(contact_center_router)
 static_root = Path(__file__).parent / 'static'
@@ -38,7 +38,7 @@ def index():
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.3.0'}
+    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.5.0-foundation'}
 
 # Single administrator for development/MVP. Use enterprise SSO and proper RBAC in production.
 login_attempts = {}

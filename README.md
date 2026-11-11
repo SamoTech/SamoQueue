@@ -1,6 +1,18 @@
-> **Architecture change — independent QueuePilot ACD (v0.4 foundation, 11 Nov 2026).**  
-> The target architecture is now **Avaya SIP call handoff only**. QueuePilot must own IVR, queueing, agents, call media, recording, live monitoring and reports. See [`docs/INDEPENDENT_CONTACT_CENTER_ARCHITECTURE.md`](docs/INDEPENDENT_CONTACT_CENTER_ARCHITECTURE.md).  
-> The v0.2/v0.3 CTI/Avaya operations modules remain transitional legacy functionality; the new ACD module in `telephony/` is a **tested decision engine, not yet a live telephony switch**. Do not route live calls to it until the ARI controller and media plane have been commissioned.
+# QueuePilot — Independent Native SIP Call Center (v0.5 foundation)
+
+> **Corrected requirement (11 Nov 2026): no Asterisk, FreeSWITCH or independent telephony middleware.** Avaya Aura **only hands off incoming calls via SIP**. QueuePilot itself will own IP phone calls, IVR, agent ACD, RTP bridging, recordings, supervisor listening, reports, and administrative controls. See the **[native SIP architecture and compatibility requirements](docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md)**.
+>
+> **Implementation status:** The standalone ACD rules, trusted SIP ingress routing policy, registered/provisioned phone location policy and isolated **lab-only** SIP OPTIONS probe are tested. The real SIP B2BUA, phone registrar/authentication and RTP media switch are **NOT YET IMPLEMENTED**. **Do not route live calls to this build.** A SIP-enabled IP phone is required; a phone that is H.323-only or locked to Avaya registration cannot be called independently without changing its endpoint setup.
+
+## Native SIP foundation
+
+- `telephony/acd.py`: queue/agent scheduler, skills, priorities and offer/ACW timing.
+- `telephony/native_sip.py`: validates Avaya peer and DID mapping, authorized LAN phone contacts and SIP dial *intent* (not live origination).
+- `telephony/sip_probe.py`: local UDP OPTIONS compatibility probe on 127.0.0.1:15060 (explicitly rejects INVITEs; lab only).
+- `tests/test_native_sip.py`: signaling ingress/phone/ACD authorization and safety tests.
+- No Asterisk or FreeSWITCH runtime is part of the architecture. Historical v0.2/v0.3 Avaya control code below is legacy and not required for the target system.
+
+---
 
 # QueuePilot v0.2 — Avaya Aura Operations Platform
 

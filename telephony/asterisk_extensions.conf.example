@@ -1,8 +1,0 @@
-; LAB SAMPLE ONLY. No production routing changes have been applied.
-; QueuePilot must have an active authenticated ARI WebSocket application called queuepilot.
-; If it is offline, Stasis returns and this route gives a safe failure announcement.
-[from-avaya-queuepilot]
-exten => _X.,1,NoOp(QueuePilot incoming call ${CALLERID(num)} -> ${EXTEN})
- same => n,Stasis(queuepilot,${EXTEN})
- same => n,Playback(all-circuits-busy-now)
- same => n,Hangup()

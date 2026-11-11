@@ -115,7 +115,7 @@ class ACD:
         self.calls[call_id] = call
         return call
 
-    def dispatch(self) -> list[Offer]:
+    def dispatch(self, eligible_agent: Callable[[Agent], bool] | None = None) -> list[Offer]:
         """Return actions for media layer to originate; do not claim ringing success."""
         now = self.clock()
         self.tick()
@@ -125,7 +125,8 @@ class ACD:
         for call in calls:
             eligible = [a for a in self.agents.values()
                         if a.state == 'ready' and a.assigned_call is None
-                        and call.required_skills.issubset(a.skills)]
+                        and call.required_skills.issubset(a.skills)
+                        and (eligible_agent is None or eligible_agent(a))]
             if not eligible:
                 continue
             fresh = [a for a in eligible if a.id not in call.attempted_agents]
