@@ -8,3 +8,9 @@
 .aura-form button {justify-self:start;}
 #auraCommands button {margin:3px;}
 #auraReadiness .mini-stat strong {font-size:16px;}
+.audio-bar{display:flex;align-items:center;gap:15px;flex-wrap:wrap;padding:18px 20px;border-top:1px solid #29344b;margin-top:12px}
+.audio-bar[hidden]{display:none}
+.audio-bar audio{max-width:100%;flex:1;min-width:220px}
+#ivrGraph{font-family:monospace;font-size:12px;line-height:1.5;min-height:260px;white-space:pre;tab-size:2}
+#recordingPlayerWrap strong{max-width:250px;overflow:hidden;text-overflow:ellipsis}
+[hidden]{display:none!important}
