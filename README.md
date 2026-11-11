@@ -1,181 +1,67 @@
-# QueuePilot v0.6 — Independent Native SIP Lab Engine
+# QueuePilot v0.7 — Independent SIP Contact Center (LAB)
 
-**Target:** Avaya Aura delivers an incoming call on an approved SIP trunk; QueuePilot
-manages its own queues, agent calls, IVR, media, recordings and reporting.
-**No Asterisk, FreeSWITCH or third-party PBX** is installed or required.
-The phone MUST be compatible with an independent SIP registrar (Avaya H.323-only
-firmware/stations are not supported by this SIP lab implementation).
+QueuePilot is being built as an **independent contact-center platform**, not an Avaya management console. **Avaya Aura hands off inbound calls over SIP; all queue decisions, agent SIP sessions, call media, IVR, recording and supervision are intended to be owned by QueuePilot.** There is no Asterisk, FreeSWITCH, AES, WTI, TSAPI, or DMCC component in this repository.
 
-## New operational lab path (v0.6)
+> **Release status: restricted lab / development. NOT production-ready.** A simulated SIP trunk and softphone have been tested; Avaya Aura and actual Avaya IP handset interoperability have not been verified. Many requested call-center features are still only management scaffolding or planned. Do **not** route customer calls to this release.
 
-The `telephony/native_switch.py` service and its in-process helpers now handle:
+## What actually works today
 
-- A phone registering directly to QueuePilot using SIP `REGISTER` + SHA-256 Digest
-  authentication (nonce expiry, replay protection, restricted voice VLAN).
-- An authorized incoming `INVITE` from the configured Avaya SIP peer, DID-to-queue
-  lookup, independent ACD selection, and outgoing `INVITE` to the agent's phone.
-- Agent answer handling and separate SIP dialogs on both legs (lab subset),
-  with caller answer only after agent accepts.
-- Two-way G.711 RTP, **anchored inside QueuePilot**, with no direct caller/phone media bypass.
-- BYE/CANCEL handling, retrying a different eligible agent on rejection, and
-  after-call-work transitions.
-- Optional **per-leg diagnostic WAV** recording, explicitly OFF by default,
-  requiring lawful notice/consent before it is used with real callers.
+- Native UDP/IPv4 SIP REGISTER with SHA-256 Digest and time-limited nonces (lab subset).
+- Allowlisted inbound SIP INVITE / DID routing; an independent in-memory ACD chooses a registered agent according to skills and longest idle time.
+- Agent outbound INVITE, basic SIP responses/ACK/BYE/CANCEL, anchored two-way G.711 RTP in an isolated lab.
+- Optional local per-leg diagnostic WAV capture, **disabled by default**.
+- Separate management service with queue/agent directory, call history, dashboard, basic SLA, recording library, audited supervisor approval workflow, IVR **drafts**, and ten CSV/JSON/ZIP report datasets.
+- **v0.7:** the optional `--local-events` adapter writes native SIP call lifecycle events straight into QueuePilot's SQLite database (no PBX CTI bridge). The dashboard displays the source's **reported** health. The adapter validates its queue and agent IDs against the dashboard database before starting.
+- Existing legacy PBX integration endpoints, bridge workers, UI, setup keys, and obsolete documentation were removed.
 
-**Verified locally:** a simulated trunk and SIP phone register and establish a
-call, exchange G.711 RTP in both directions, and hang up with a coherent ACD state.
-`python -m pytest -q` covers the new lab flow plus existing app tests.
-
-### Lab-only start
-
-```bash
-cd avaya-queue-platform
-cp telephony/native_switch.example.json telephony/native_switch.local.json
-# Change ALL REPLACE_ placeholders to unique secrets before running.
-# Use loopback-only settings from the example in an isolated test machine.
-python -m telephony.native_switch --config telephony/native_switch.local.json --lab
-```
-
-In a **separate terminal**, the legacy dashboard runs with:
-
-```bash
-python setup_demo.py
-python run.py
-```
-
-**Integration limitation:** Native SIP call events are currently held in the
-engine's lab process and are not yet fed automatically to the reporting DB.
-The existing dashboard recording/monitoring and IVR editors remain separate
-application features, not connected to the live RTP core.
-
-### Do NOT point production Avaya trunks at this build
-
-This is a restricted **UDP IPv4/G.711 development implementation**, not a
-complete standards-certified or production-safe SIP switch. It lacks complete
-RFC 3261 transaction retransmission machinery, TLS/SRTP, resilient RTP/RTCP,
-DTMF-driven IVR playback, transfers/hold, supervisor mixing/whisper/barge,
-production recording controls, enterprise RBAC, failover, SIP extensions,
-durable state, actual Avaya-phone interoperability tests, and load/security
-validation. Unsupported transports and codecs fail closed.
-
-See [`docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md`](docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md)
-for the independent target architecture and compatibility constraints.
-
-The next production implementation milestone is a security-reviewed SIP
-transaction/dialog core and anchored media service with full call lifecycle,
-then IVR, supervisor media and high availability. Existing v0.2-v0.5
-connectors and demo controls are historical prototypes, not required
-intermediary PBXs.
-
----
-
-# QueuePilot v0.2 — Avaya Aura Operations Platform
-
-A runnable prototype of a call-center supervisor platform with **queue statistics, agent directory, polling, call events, SLA reporting, secured integration ingestion, Avaya Aura resource mapping, guarded command approval, routing proposals, audit trails and CSV exports**.
-
-**Integration status:** The Avaya Aura control plane and configurable WTI HTTPS worker are implemented and tested in isolation. **No customer PBX connection has been made or verified.** The included WTI action template is deliberately nonoperational until filled with the official API definitions for the installed AES release. Read [`AURA_DEPLOYMENT.md`](AURA_DEPLOYMENT.md) before integration.
-
-## Run locally
+## Run management dashboard locally
 
 Requires Python 3.11+.
 
 ```bash
-cd avaya-queue-platform
 python -m venv .venv
-# Windows: .venv\Scripts\activate
 # Linux/macOS: source .venv/bin/activate
+# Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python setup_demo.py
+python setup_demo.py               # once: writes .env with unique demo secrets
 python run.py
 ```
 
-The setup script generates unique credentials and prints the initial **admin password once**. Keep it secure. Open **http://127.0.0.1:8000**, sign in as `admin` and click **Load demo data**.
+Open `http://127.0.0.1:8000` on the test machine. The setup script prints the generated administrator password once. `.env` and all runtime data must remain uncommitted.
 
-For manual production-oriented configuration, copy `.env.example` to `.env`, replace every secret placeholder (admin password, app signing secret, event ingestion key and separate command bridge key) with different strong secrets and change `APP_DEMO_MODE=false`.
-
-The `Simulate event` buttons then generate new/answered/abandoned/completed calls; refresh occurs every 4 seconds. Avaya call-control actions remain disabled by default (`AURA_CONTROL_ENABLED=false`).
-
-## Capabilities
-
-- Six-view operations console with queue health, agent state, call activity, reporting, Aura control, and configuration
-- API-key-authenticated event ingestion (`X-Integration-Key`), timestamp validation, deduplication and out-of-order protections
-- Configurable queues: names, skill labels, SLA seconds, targets, enable/disable
-- Agents: local directory, extension, status and team assignment; authenticated integration events update agent state
-- Aura VDN/skill -> local queue and station/login -> local agent mapping
-- Supervisor call-control requests with mandatory approval, internal-destination allowlist, separate privileged bridge key, expiry/no replay and audit
-- Standalone configurable WTI HTTPS bridge with fail-closed response validation and TLink-state probing
-- Routing change proposals (deliberately **not** applied automatically to CM)
-- Call lifecycle: queued → answered → completed, or queued → abandoned
-- Masking of caller numbers at ingestion, CSV exports, SQLite WAL persistence
-- Basic local supervisor login and demo mode
-- API documentation at `/docs`; health check at `/api/health`
-
-## Docker
+The standalone native SIP lab starts separately (same project, **no external telephony system**):
 
 ```bash
-docker build -t queuepilot .
-docker run --rm -p 127.0.0.1:8000:8000 \
-  --env-file .env -v "$PWD/data:/srv/app/data" queuepilot
+cp telephony/native_switch.example.json telephony/native_switch.local.json
+# Replace every REPLACE_ placeholder with unique secrets.
+python -m telephony.native_switch --config telephony/native_switch.local.json --lab
 ```
 
-If `APP_DB_PATH` is relative, it is resolved relative to the project root. The directory mounted above is writable by container UID 10001; ensure permissions are correct on Linux.
+**Optional reporting integration (lab only):** Create dashboard queues and agents first, replace the route `queue` and agent IDs in the local SIP JSON with their actual QueuePilot database IDs, then launch with `--lab --local-events`. Both processes must use the same `APP_DB_PATH`. The adapter writes directly to SQLite and records a local heartbeat. It is single-node and synchronous: **not a durable message bus, crash-recovery journal, or production-scale event stream**. If this ID validation fails, the SIP process refuses to start with local persistence enabled. Without the option, the dashboard does **not** get native SIP call events automatically.
 
-## Architecture
+## API surface
 
-```
-Avaya Aura AES WTI / TSAPI / DMCC   ┐
-Avaya IP Office DevLink3            ├──> licensed/vendor-specific CTI bridge ── HTTPS + API key
-Avaya Experience Platform APIs      ┘                                      │
-                                                                        ▼
-                                                             /api/integrations/events
-                                                                        │
-                                                                  FastAPI + SQLite
-                                                                        │
-                                                              Supervisor web console
-```
+- `POST /api/login`, `GET /api/dashboard`, `/api/queues`, `/api/agents` — dashboard management.
+- `POST /api/engine/events` and `/api/engine/heartbeat` — internal native-telephony event API; `X-Engine-Key` and exact `source=queuepilot-native` are mandatory. No Aura or external CTI endpoint exists.
+- `/api/cc/recordings`, `/api/cc/monitor`, `/api/cc/ivr`, `/api/cc/reports` — domain services. Native RTP recording import/streaming and IVR execution are **not integrated end-to-end**. Recording and monitoring flags are off by default.
 
-`Avaya` remains responsible for actual telephony, queue selection, IVR, hold audio and routing. QueuePilot provides **monitoring + call-control request workflows**; the control gateway requires a separately configured AES WTI/TSAPI driver. It does not replace the PBX/ACD or IVR.
+## Missing features and release blockers
 
-## Production hardening before connecting to a real PBX
+**Not completed:** complete RFC 3261 SIP dialogs/transactions, retransmissions, TLS/SRTP/RTCP, DTMF IVR prompt playback, hold/transfer/conference, production recordings, RTP mixing and live listening/whisper/barge, durable ACD/registration state, multi-node HA, comprehensive queue/agent metrics, disaster recovery, session recovery, production identity and compliance workflows. Real Avaya SIP trunk and Avaya phone firmware compatibility must be validated before use.
 
-1. Set `APP_DEMO_MODE=false`, unique strong secrets, and run behind a TLS reverse proxy with network allowlists and rate limiting.
-2. Use per-connector authentication/key rotation, mTLS where available, and log redaction; restrict API/docs to a private management network.
-3. Replace MVP admin login with enterprise SSO and role-based access (supervisor/administrator/auditor), auditing every edit.
-4. Use a supported production DB (e.g. PostgreSQL), migrations, retention policy, backups, monitoring, HA, and an event replay queue; the included SQLite prototype is single-node.
-5. Obtain exact Avaya product, release, SDK, CTI license, endpoint, user privilege, VDN/skill/agent mapping and event semantics. Implement session reconnects, heartbeats, event replay, and media/PII controls; **do not automatically replay uncertain telephony commands**.
-6. Align SLA definitions, timezones, call-transfer semantics, and abandon treatment with Avaya CMS/your organization's reports.
-7. Test out-of-order events, missing lifecycle events, large loads, emergency call handling policies, and failure recovery in a **nonproduction Avaya tenant** first.
+The `app/` dashboard and `telephony/` runtime currently run as **two QueuePilot-owned processes**. That does not make them intermediary PBXs. `--local-events` shares a lab SQLite DB; it is not suitable for production concurrency/failover.
 
-## Limitations
+## Security and preservation
 
-- Dashboard polls every 4 seconds (not a vendor-guaranteed real-time feed).
-- The local status/queue configuration remains **local only**. A call-control request can be sent through the *configurable external bridge* only if AES access is commissioned, per-operation responses are validated and `AURA_CONTROL_ENABLED=true`. No actual customer PBX operation has been performed.
-- The example WTI JSON template is **not** a production action mapping. Routes and response selectors must come from actual AES API documentation.
-- VDN/vector/skill route changes are advisory only; CMS/SMS adapters are not implemented.
-- Basic SLA definition: answered within configured seconds / (answered + abandoned) for calls arriving during the current local day. No short-abandon exclusions or vendor-specific transfer accounting.
-- Traffic chart uses UTC calendar dates, whereas today's metrics use `APP_TIMEZONE`.
-- `connected` is true only when an authenticated bridge reports an active CTI monitor session via `/api/integrations/heartbeat` within the past 30 seconds. This is **bridge-reported** health, not an independently verified PBX session.
-- Requires correct upstream call IDs, event ordering, and unique event IDs per source.
+- Bound SIP networking to loopback in the supplied lab example. Do not expose UDP SIP/RTP, `/docs`, or internal engine APIs to public networks.
+- Use a private voice VLAN, strong per-phone credentials, legal recording notices/consent, secure audio storage, audit logs and supervised monitoring approvals.
+- Existing database tables created by the obsolete AES/Aura integration are **preserved, not used**. This cleanup does not delete historical data or recordings. The old audit table is copied idempotently to the generic `audit_log`. Back up the database before upgrading any existing installation.
+- `.env.example` contains placeholders only. Real phone secrets go in the ignored `telephony/native_switch.local.json`.
 
-## Tests
-
-```bash
-pytest -q
-```
-
-For **Aura/Communication Manager**, start with `AURA_DEPLOYMENT.md`. `AVAYA_INTEGRATION.md` contains general vendor-neutral ingestion notes.
-
-The test suite includes bridge transport, mapping, approvals, idempotency, unauthorized claims and routing advisory checks.
-
-## QueuePilot v0.3 — media, supervision, IVR drafts and reports
-
-The **Contact Center** upgrade adds a recording library with authenticated upload/playback; a dedicated reviewer and audited monitoring workflow; a secure WebSocket PCM relay for an *external authorized* Avaya DMCC media bridge; validated IVR graph drafts and non-executing deployment proposals; and CSV/JSON/ZIP exports across ten operational report categories.
-
-**No real-time recording, DMCC media capture, browser live listening, or IVR deployment operates against Avaya without a licensed and configured external bridge**. These are integration points, not an Avaya-native recording engine. Read [`AURA_MEDIA_DEPLOYMENT.md`](AURA_MEDIA_DEPLOYMENT.md) before enabling any audio or monitoring feature. All audio-related flags default to disabled.
-
-### v0.3 testing
+See [architecture and gap analysis](docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md) and [the cleanup audit](docs/CODEBASE_CLEANUP_AUDIT.md). Run checks with:
 
 ```bash
 python -m pytest -q
+python -m compileall -q app telephony tests
 node --check app/static/app.js
 ```

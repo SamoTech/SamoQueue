@@ -52,16 +52,9 @@ def require_reviewer(authorization: str | None = Header(default=None)):
     return user
 
 
-def require_ingest(x_integration_key: str | None = Header(default=None)):
-    if not x_integration_key or not hmac.compare_digest(x_integration_key, config.ingest_key):
-        raise HTTPException(status_code=401, detail='Invalid integration key')
+def require_engine_event(x_engine_key: str | None = Header(default=None)):
+    if (not x_engine_key or len(config.engine_event_key) < 32
+            or not hmac.compare_digest(x_engine_key, config.engine_event_key)):
+        raise HTTPException(status_code=401, detail='Invalid native engine credential')
     return True
 
-
-
-def require_aura_control_bridge(x_aura_command_key: str | None = Header(default=None)):
-    """Separate credential; event ingestion alone must never grant call control."""
-    if (not x_aura_command_key or len(config.aura_command_key)<32
-            or not hmac.compare_digest(x_aura_command_key, config.aura_command_key)):
-        raise HTTPException(status_code=401, detail='Invalid Avaya command bridge key')
-    return True

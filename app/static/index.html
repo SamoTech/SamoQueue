@@ -12,7 +12,7 @@
     <label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required>
     <div id="loginError" class="error" role="alert"></div>
     <button class="primary wide" type="submit">Sign in <span>→</span></button>
-    <div class="login-footer">Protected supervisor access · Avaya-ready integration</div>
+    <div class="login-footer">Protected supervisor access · Native QueuePilot operations</div>
   </form>
 </div>
 <div class="layout" id="app" hidden>
@@ -27,12 +27,11 @@
       <button class="nav-link" data-page="monitor"><span class="nav-icon">◉</span> Live listening</button>
       <button class="nav-link" data-page="ivr"><span class="nav-icon">⌘</span> IVR designer</button>
       <button class="nav-link" data-page="reports"><span class="nav-icon">▥</span> Reports</button>
-      <button class="nav-link" data-page="aura"><span class="nav-icon">◇</span> Avaya Aura control</button>
       <button class="nav-link" data-page="settings"><span class="nav-icon">⚙</span> Configuration</button>
     </nav>
-    <div class="side-bottom"><div class="monitor-icon">◈</div><strong>Integration gateway</strong>
-      <p>Normalized Avaya event ingestion is enabled. Live connection verification requires a CTI bridge.</p>
-      <div id="sideConnection" class="integration-state">● No CTI heartbeat</div>
+    <div class="side-bottom"><div class="monitor-icon">◈</div><strong>Native SIP engine</strong>
+      <p>Only QueuePilot-native engine events are accepted. The SIP runtime and dashboard have separate processes.</p>
+      <div id="sideConnection" class="integration-state">● Native engine not connected</div>
     </div>
     <button class="logout" id="logout">↪ <span>Sign out</span></button>
   </aside>
@@ -44,7 +43,7 @@
       <section id="page-overview" class="page">
         <div class="page-top"><div><div class="eyebrow purple">REAL-TIME COMMAND CENTER</div><h1>Operations overview<span class="dot">.</span></h1><p>One view of queue performance, traffic and agent availability.</p></div>
           <div class="top-actions"><button class="ghost" id="refreshBtn">⟳ &nbsp;Refresh</button><button class="primary demo-action" id="demoStepTop">▶ Simulate event</button></div></div>
-        <div id="demoBanner" class="demo-banner">◈ &nbsp;<strong>Demo environment</strong>&nbsp; · Sample call events only. No live PBX connection is active. &nbsp; <button id="seedDemoBtn" class="small-button" type="button">Load demo data</button></div>
+        <div id="demoBanner" class="demo-banner">◈ &nbsp;<strong>Demo environment</strong>&nbsp; · Sample call events only. No live native SIP event feed is active. &nbsp; <button id="seedDemoBtn" class="small-button" type="button">Load demo data</button></div>
         <div class="stat-grid" id="statGrid"></div>
         <div class="two-columns">
           <div class="panel"><div class="panel-head"><div><h2>Traffic overview</h2><p>Answered and abandoned calls · last 7 UTC dates</p></div><span class="subtle-label">7 DAYS</span></div>
@@ -56,14 +55,14 @@
       <section id="page-calls" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">CONTACT ACTIVITY</div><h1>Live calls<span class="dot">.</span></h1><p>Call lifecycle events and current queue positions.</p></div><div class="top-actions"><button class="primary demo-action" id="demoStepCalls">▶ Simulate event</button></div></div>
         <div class="mini-stats" id="callMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Call activity</h2><p>Recent inbound calls, newest first</p></div><select id="callFilter" aria-label="Filter calls"><option value="all">All statuses</option><option value="queued">Waiting</option><option value="answered">In progress</option><option value="completed">Completed</option><option value="abandoned">Abandoned</option></select></div>
         <div class="table-scroll"><table><thead><tr><th>CALL ID</th><th>CALLER</th><th>QUEUE</th><th>STATUS</th><th>ARRIVAL</th><th>WAIT TIME</th><th>AGENT</th><th>SUPERVISOR</th></tr></thead><tbody id="callRows"></tbody></table></div></div>
-        <div class="small-note">Call IDs are scoped to the upstream event source. Caller numbers are masked on ingestion.</div></section>
+        <div class="small-note">Calls are identified by QueuePilot native call ID; caller numbers are masked.</div></section>
       <section id="page-agents" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">PEOPLE & CAPACITY</div><h1>Agent management<span class="dot">.</span></h1><p>Track agent presence and team distribution.</p></div><button class="primary" id="newAgentBtn">+ Add agent</button></div>
-        <div class="mini-stats" id="agentMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Agent directory</h2><p>Manual status edits affect this dashboard only, not Avaya</p></div></div><div class="table-scroll"><table><thead><tr><th>AGENT</th><th>EXTENSION</th><th>ASSIGNED QUEUE</th><th>STATUS</th><th>LAST CHANGE</th><th>LOCAL EDIT</th></tr></thead><tbody id="agentRows"></tbody></table></div></div></section>
+        <div class="mini-stats" id="agentMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Agent directory</h2><p>Manual directory status updates do not yet control the SIP runtime</p></div></div><div class="table-scroll"><table><thead><tr><th>AGENT</th><th>EXTENSION</th><th>ASSIGNED QUEUE</th><th>STATUS</th><th>LAST CHANGE</th><th>LOCAL EDIT</th></tr></thead><tbody id="agentRows"></tbody></table></div></div></section>
       <section id="page-recordings" class="page" hidden>
         <div class="page-top"><div><div class="eyebrow purple">QUALITY & COMPLIANCE</div><h1>Call recordings<span class="dot">.</span></h1>
-          <p>Find and play captured calls. Recordings are uploaded by an authorized Avaya recorder.</p></div>
+          <p>Find and play captured calls. Native RTP recordings will be indexed here after the media-engine link is implemented.</p></div>
           <button id="reloadRecordings" class="ghost">⟳ Refresh</button></div>
-        <div class="demo-banner" style="display:block">A licensed DMCC or existing recorder must supply the audio. No native PBX RTP capture is included in QueuePilot.</div>
+        <div class="demo-banner" style="display:block">Playback is available for authenticated native-media imports. Automatic RTP recording-to-library integration is not yet completed.</div>
         <div class="panel"><div class="panel-head"><div><h2>Recording library</h2><p>Supervisor playback and downloads are audited</p></div></div>
           <div class="table-scroll"><table><thead><tr><th>RECORDED</th><th>CALL</th><th>QUEUE</th><th>AGENT</th><th>DURATION</th><th>SIZE</th><th>ACTIONS</th></tr></thead>
              <tbody id="recordingRows"></tbody></table></div>
@@ -72,11 +71,11 @@
       </section>
       <section id="page-monitor" class="page" hidden>
         <div class="page-top"><div><div class="eyebrow purple">SUPERVISOR QUALITY</div><h1>Live listening<span class="dot">.</span></h1>
-         <p>Authorized supervision with separate approval and an on-premises DMCC media bridge.</p></div>
+         <p>Authorized supervisor access to QueuePilot native media, subject to approval.</p></div>
          <button id="reloadMonitoring" class="ghost">⟳ Refresh</button></div>
-        <div class="demo-banner" style="display:block">Monitoring is disabled until a dedicated reviewer, authorized DMCC observer, and secure PCM bridge are configured. No monitoring happens without approval.</div>
-        <div class="panel"><div class="panel-head"><div><h2>Listen requests</h2><p>Administrator requests; separate reviewer approves; the Avaya bridge starts Service Observing</p></div></div>
-          <div class="table-scroll"><table><thead><tr><th>CALL</th><th>AGENT</th><th>STATION</th><th>REQUESTED</th><th>STATE</th><th>ACTIONS</th></tr></thead>
+        <div class="demo-banner" style="display:block">Monitoring is disabled by default. The native media mixer and runtime approval path must be integrated and verified before live listening.</div>
+        <div class="panel"><div class="panel-head"><div><h2>Listen requests</h2><p>Administrator requests; independent reviewer approves; native media engine must activate listening</p></div></div>
+          <div class="table-scroll"><table><thead><tr><th>CALL</th><th>AGENT</th><th>EXTENSION</th><th>REQUESTED</th><th>STATE</th><th>ACTIONS</th></tr></thead>
              <tbody id="monitorRows"></tbody></table></div>
           <div class="audio-bar" id="livePlayerWrap" hidden><strong>Authorized live audio</strong>
             <span class="small-note" id="liveAudioState">Not connected</span>
@@ -87,92 +86,42 @@
         <div class="page-top"><div><div class="eyebrow purple">CUSTOMER JOURNEYS</div><h1>IVR designer<span class="dot">.</span></h1>
          <p>Design and validate DTMF menus, announcements, queue routing, transfers and hangups.</p></div>
          <button id="reloadIvr" class="ghost">⟳ Refresh</button></div>
-        <div class="demo-banner" style="display:block">Design and review only: deploying Communication Manager vectors or Experience Portal applications requires a release-specific adapter and change approval.</div>
+        <div class="demo-banner" style="display:block">Design and review only: the QueuePilot native IVR execution engine is not yet connected.</div>
         <div class="two-columns"><div class="panel"><div class="panel-head"><div><h2>Saved IVR flows</h2><p>Versions and deployment proposal status</p></div></div>
             <div id="ivrFlowList" class="queue-settings"></div></div>
           <div class="panel"><div class="panel-head"><div><h2>Graph editor</h2><p>Validatable structured flow definition; terminal destinations must exist</p></div></div>
-            <form id="ivrForm" class="aura-form">
+            <form id="ivrForm" class="config-form">
               <label>Flow name <input name="name" id="ivrName" required minlength="3" maxlength="100" placeholder="Main greeting"></label>
               <label>Description <input name="description" id="ivrDescription" maxlength="500" placeholder="Weekday customer menu"></label>
               <label>Graph (JSON)<textarea id="ivrGraph" rows="13" spellcheck="false" required></textarea></label>
               <div class="top-actions"><button type="button" class="ghost" id="ivrSample">Load example</button>
                 <button type="submit" class="primary">Save draft</button></div>
-              <span class="small-note">Saving a draft never alters Avaya routing or plays any audio.</span>
+              <span class="small-note">Saving a draft does not activate native IVR playback or routing.</span>
             </form>
           </div></div>
       </section>
       <section id="page-reports" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">PERFORMANCE INSIGHTS</div><h1>Reports & analytics<span class="dot">.</span></h1><p>Download detailed call, queue, agent, SLA, half-hourly, recording, monitoring, IVR, event and audit reports.</p></div><button class="primary" id="exportBtn">↓ Export CSV</button></div>
         <div class="panel"><div class="panel-head"><div><h2>Report exporter</h2><p>CSV (Excel-compatible), JSON, or a ZIP containing all reports</p></div></div>
-          <form id="reportExportForm" class="aura-form">
+          <form id="reportExportForm" class="config-form">
             <label>Report <select id="reportType"><option value="calls">Call detail</option><option value="queues">Queue summary</option>
             <option value="agents">Agent performance</option><option value="intervals">30-minute traffic</option><option value="sla">SLA</option>
             <option value="recordings">Recording inventory</option><option value="monitoring">Monitoring audit</option>
-            <option value="ivr">IVR versions</option><option value="audit">Control audit</option><option value="events">CTI event log</option></select></label>
+            <option value="ivr">IVR versions</option><option value="audit">Control audit</option><option value="events">Native event log</option></select></label>
             <label>From <input id="reportFrom" type="datetime-local"></label>
             <label>To <input id="reportTo" type="datetime-local"></label>
             <div class="top-actions"><button type="button" class="ghost" id="exportSelectedCsv">Download selected CSV</button>
               <button type="button" class="ghost" id="exportSelectedJson">Download JSON</button>
               <button type="button" class="primary" id="exportAll">Download all (ZIP)</button></div>
-          </form></div><div class="mini-stats" id="reportMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Queue performance</h2><p>Today's performance in the configured local timezone</p></div></div><div class="table-scroll"><table><thead><tr><th>QUEUE</th><th>ANSWERED</th><th>ABANDONED</th><th>AVG ANSWER WAIT</th><th>SLA ACTUAL</th><th>SLA TARGET</th></tr></thead><tbody id="reportRows"></tbody></table></div></div><p class="small-note">MVP SLA = answered within each queue threshold / (answered + abandoned); unanswered active calls are excluded. This must be reconciled with your Avaya CMS reporting definition before production.</p></section>
-      <section id="page-aura" class="page" hidden>
-        <div class="page-top"><div><div class="eyebrow purple">AES / COMMUNICATION MANAGER</div>
-          <h1>Avaya Aura operations<span class="dot">.</span></h1>
-          <p>Map PBX resources, review call-control requests, and prepare safe routing changes.</p></div>
-          <button id="auraRefresh" class="ghost">⟳ Refresh integration</button></div>
-        <div class="demo-banner" style="display:block">⚠ <strong>Integration gateway only.</strong>
-          PBX call control needs a licensed AES bridge and explicit enablement. Routing proposals never alter the PBX automatically.</div>
-        <div id="auraReadiness" class="mini-stats"></div>
-        <div class="two-columns">
-          <div class="panel"><div class="panel-head"><div><h2>VDN / skill mapping</h2><p>Link each QueuePilot queue to the real CM VDN and/or hunt group</p></div></div>
-            <div id="auraQueueBindings" class="queue-settings"></div></div>
-          <div class="panel"><div class="panel-head"><div><h2>Station / agent mapping</h2><p>Explicit mapping required for call control and agent-state events</p></div></div>
-            <div id="auraAgentBindings" class="queue-settings"></div></div>
-        </div>
-        <div class="two-columns">
-          <div class="panel"><div class="panel-head"><div><h2>Request PBX call control</h2><p>All requests require approval. Internal dialling only.</p></div></div>
-            <form id="auraCommandForm" class="aura-form">
-              <label>Action <select name="action" id="auraAction" required>
-                <option value="call.make">Make call</option><option value="call.answer">Answer</option>
-                <option value="call.hold">Hold</option><option value="call.retrieve">Retrieve</option>
-                <option value="call.transfer">Transfer</option><option value="call.drop">Disconnect</option>
-                <option value="agent.ready">Agent ready</option><option value="agent.aux">Agent AUX</option>
-              </select></label>
-              <label>Mapped station <select name="station" id="auraStation" required></select></label>
-              <label>PBX call ID (not needed for make call/agent state)
-                <input name="call_id" placeholder="From AES monitor event"></label>
-              <label>Internal destination (make call/transfer)
-                <input name="destination" placeholder="e.g. 4102" inputmode="numeric"></label>
-              <button type="submit" class="primary">Create approval request</button>
-            </form>
-          </div>
-          <div class="panel"><div class="panel-head"><div><h2>Routing change proposal</h2><p>Controlled planning only; AES SMS deployment is not yet enabled</p></div></div>
-            <form id="auraPlanForm" class="aura-form">
-              <label>Queue <select name="queue_id" id="auraPlanQueue" required></select></label>
-              <label>Change type <select name="change_type"><option value="vdn_destination">VDN destination</option>
-                <option value="vector_steps">Vector steps</option><option value="skill_membership">Skill membership</option>
-                <option value="hours_of_operation">Business hours</option></select></label>
-              <label>Requested change <textarea name="desired" rows="2" minlength="4" maxlength="1000" required></textarea></label>
-              <label>Business reason <textarea name="reason" rows="2" minlength="8" maxlength="500" required></textarea></label>
-              <button type="submit" class="ghost">Save routing proposal</button>
-            </form>
-          </div>
-        </div>
-        <div class="panel"><div class="panel-head"><div><h2>Call-control requests</h2>
-          <p>Only a licensed external CTI bridge can acknowledge execution</p></div></div>
-          <div class="table-scroll"><table><thead><tr><th>REQUEST</th><th>ACTION</th><th>STATION</th><th>DESTINATION</th><th>STATUS</th><th>RESULT</th><th>APPROVAL</th></tr></thead>
-          <tbody id="auraCommands"></tbody></table></div></div>
-        <div class="panel"><div class="panel-head"><div><h2>Change advisory</h2><p>Configuration proposals awaiting review by an Avaya administrator</p></div></div>
-          <div id="auraPlans" class="queue-settings"></div></div>
-      </section>
-      <section id="page-settings" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">SYSTEM ADMINISTRATION</div><h1>Configuration<span class="dot">.</span></h1><p>Queue thresholds, source mapping, and integration readiness.</p></div><button class="primary" id="newQueueBtn">+ Create queue</button></div>
+          </form></div><div class="mini-stats" id="reportMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Queue performance</h2><p>Today's performance in the configured local timezone</p></div></div><div class="table-scroll"><table><thead><tr><th>QUEUE</th><th>ANSWERED</th><th>ABANDONED</th><th>AVG ANSWER WAIT</th><th>SLA ACTUAL</th><th>SLA TARGET</th></tr></thead><tbody id="reportRows"></tbody></table></div></div><p class="small-note">MVP SLA = answered within each queue threshold / (answered + abandoned); unanswered active calls are excluded. Real-time SIP event delivery must be completed and reconciled before production.</p></section>
+      <section id="page-settings" class="page" hidden><div class="page-top"><div><div class="eyebrow purple">SYSTEM ADMINISTRATION</div><h1>Configuration<span class="dot">.</span></h1><p>Queue thresholds, native SIP health and event ingestion.</p></div><button class="primary" id="newQueueBtn">+ Create queue</button></div>
         <div class="settings-grid"><div class="panel"><div class="panel-head"><div><h2>Queue configuration</h2><p>Manage local queue IDs and SLA targets</p></div></div><div id="queueSettings" class="queue-settings"></div></div>
-          <div class="panel"><div class="panel-head"><div><h2>Avaya integration</h2><p>Connector diagnostics</p></div></div>
-            <div class="diag-row"><span>Ingestion API</span><strong class="good">Ready</strong></div>
-            <div class="diag-row"><span>Provider</span><strong id="provider">Not configured</strong></div>
+          <div class="panel"><div class="panel-head"><div><h2>QueuePilot native SIP</h2><p>Runtime diagnostics</p></div></div>
+            <div class="diag-row"><span>Native event API</span><strong class="good">Ready</strong></div>
+            <div class="diag-row"><span>Event source</span><strong id="provider">Not configured</strong></div>
             <div class="diag-row"><span>Last event received</span><strong id="lastEvent">Never</strong></div>
-            <div class="diag-row"><span>CTI session reported active</span><strong class="warning">No</strong></div>
+            <div class="diag-row"><span>Native engine reported healthy</span><strong class="warning">No</strong></div>
             <div class="diag-row"><span>Mode</span><strong id="appMode">--</strong></div>
-            <div class="hint">An Avaya connector must map vendor-specific events to <code>POST /api/integrations/events</code> with its integration API key. Consult <code>AVAYA_INTEGRATION.md</code> in the project.</div>
+            <div class="hint">The embedded SIP runtime should send normalized events to <code>POST /api/engine/events</code> with an internal engine key. This integration is still pending.</div>
           </div></div></section>
     </div>
   </main>

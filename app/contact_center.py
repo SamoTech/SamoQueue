@@ -1,9 +1,9 @@
 """Call-center operations domain: recorder ingest, audited playback, monitor gateway,
 IVR drafts, and independently exportable event-derived reports.
 
-IMPORTANT: PBX recording RTP capture, service-observing and IVR deployment are NOT
-implemented here. They require an Avaya-certified/authorized on-premises connector.
-Monitoring audio is 16kHz mono signed 16-bit little-endian PCM from that connector.
+The native SIP/RTP runtime is not yet wired to recording storage, IVR execution, or
+supervisor mixing. These APIs are local management/runtime integration scaffolding,
+not proof of active recording, listening, or IVR playback.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, W
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
-from .aura import audit
+from .audit import audit
 from .config import config
 from .db import connection
 from .security import require_admin, require_reviewer, require_supervisor
@@ -42,18 +42,18 @@ RECORDING_MIMES = {'audio/wav': ('wav', b'RIFF'), 'audio/x-wav': ('wav', b'RIFF'
                    'audio/mpeg': ('mp3', None), 'audio/ogg': ('ogg', b'OggS')}
 
 
-def bridge_key(expected: str, provided: str | None):
+def engine_key(expected: str, provided: str | None):
     if (not provided or len(expected) < 32
             or not hmac.compare_digest(provided.encode(), expected.encode())):
-        raise HTTPException(401, 'Invalid bridge credential')
+        raise HTTPException(401, 'Invalid internal media engine credential')
 
 
-def check_record_key(x_recording_bridge_key: str | None = Header(default=None)):
-    bridge_key(config.recording_bridge_key, x_recording_bridge_key)
+def check_record_key(x_recording_engine_key: str | None = Header(default=None)):
+    engine_key(config.recording_engine_key, x_recording_engine_key)
 
 
-def check_monitor_key(x_monitor_bridge_key: str | None = Header(default=None)):
-    bridge_key(config.monitor_bridge_key, x_monitor_bridge_key)
+def check_monitor_key(x_monitor_engine_key: str | None = Header(default=None)):
+    engine_key(config.monitor_engine_key, x_monitor_engine_key)
 
 
 def audio_signature_ok(mime: str, head: bytes) -> bool:
@@ -78,7 +78,7 @@ async def import_recording(request: Request, source: str, call_id: str,
     """
     if not config.recordings_enabled:
         raise HTTPException(403, 'Recording import is disabled')
-    if not SOURCE_NAME.fullmatch(source) or not CALL_KEY.fullmatch(call_id):
+    if source != 'queuepilot-native' or not CALL_KEY.fullmatch(call_id):
         raise HTTPException(422, 'Invalid recording source or call identifier')
     if not consent_attested:
         raise HTTPException(422, 'Recorder consent/notice policy attestation required')
@@ -91,7 +91,7 @@ async def import_recording(request: Request, source: str, call_id: str,
         call = db.execute('SELECT id FROM calls WHERE source=? AND external_id=?',
                           (source, call_id)).fetchone()
         if not call:
-            raise HTTPException(404, 'Call not found; first ingest CTI call events')
+            raise HTTPException(404, 'Call not found; native SIP call events must be ingested first')
     folder = config.recording_dir.resolve()
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
@@ -134,7 +134,7 @@ async def import_recording(request: Request, source: str, call_id: str,
                         str(target), n, digest.hexdigest(),
                         (recorded_at or datetime.now(timezone.utc)).timestamp(),
                         duration_seconds, 1, time.time()))
-            audit(db, 'recording-bridge', 'recording.imported', recording_id, 'Audio registered')
+            audit(db, 'native-recording-engine', 'recording.imported', recording_id, 'Audio registered')
     finally:
         temp.unlink(missing_ok=True)
     return {'id': recording_id, 'duplicate': False, 'stored': True, 'bytes': n}
@@ -161,7 +161,7 @@ def recordings(limit: int = Query(default=100, ge=1, le=1000),
     with connection() as db:
         rows = [dict(r) for r in db.execute(sql, values)]
     return {'recordings': rows, 'recording_enabled': config.recordings_enabled,
-            'note': 'Media requires licensed DMCC recorder or external recording server'}
+            'note': 'Native RTP-to-library capture is not yet connected; no external recorder required by architecture'}
 
 
 @router.get('/recordings/{recording_id}/audio')
@@ -196,10 +196,10 @@ def request_monitor(data: MonitorRequest, user=Depends(require_admin)):
     if not config.monitoring_enabled:
         raise HTTPException(403, 'Monitoring disabled by administrator')
     with connection() as db:
-        call = db.execute('''SELECT c.*, b.station FROM calls c JOIN aura_agent_bindings b
-                          ON c.agent_id=b.agent_id WHERE c.id=?''', (data.call_id,)).fetchone()
-        if not call or call['source'] != 'aura-aes' or call['status'] != 'answered':
-            raise HTTPException(422, 'Requires active answered Aura call and mapped agent station')
+        call = db.execute('''SELECT c.*, a.extension AS station FROM calls c JOIN agents a
+                          ON c.agent_id=a.id WHERE c.id=?''', (data.call_id,)).fetchone()
+        if not call or call['source'] != 'queuepilot-native' or call['status'] != 'answered':
+            raise HTTPException(422, 'Requires an active answered native call with a QueuePilot agent extension')
         if db.execute('''SELECT 1 FROM monitor_sessions WHERE call_id=?
                           AND state IN ('pending_approval','queued','leased','active','stop_requested')''',
                       (call['id'],)).fetchone():
@@ -215,12 +215,12 @@ def request_monitor(data: MonitorRequest, user=Depends(require_admin)):
 @router.get('/monitor/sessions')
 def list_monitors(user=Depends(require_supervisor)):
     with connection() as db:
-        rows = [dict(r) for r in db.execute('''SELECT s.*, c.external_id AS avaya_call_id,
+        rows = [dict(r) for r in db.execute('''SELECT s.*, c.external_id AS native_call_id,
                    q.name AS queue_name,a.name AS agent_name FROM monitor_sessions s
                    JOIN calls c ON c.id=s.call_id JOIN queues q ON q.id=c.queue_id
                    LEFT JOIN agents a ON a.id=c.agent_id ORDER BY s.created_at DESC LIMIT 100''')]
     return {'sessions': rows, 'enabled': config.monitoring_enabled,
-            'transport': 'PCM16/16000/mono secure WebSocket relay (requires DMCC audio connector)'}
+            'transport': 'PCM16/16000/mono internal WebSocket relay (requires native RTP observation mixer)'}
 
 
 @router.post('/monitor/sessions/{sid}/approve')
@@ -239,7 +239,7 @@ def approve_monitor(sid: str, _: MonitorApproval, user=Depends(require_reviewer)
         db.execute("UPDATE monitor_sessions SET state='queued',approved_at=? WHERE id=?",
                    (time.time(), sid))
         audit(db, user, 'monitor.approved', sid)
-    return {'id': sid, 'state': 'queued', 'avaya_active': False}
+    return {'id': sid, 'state': 'queued', 'native_media_active': False}
 
 
 @router.post('/monitor/sessions/{sid}/stop')
@@ -257,19 +257,19 @@ def stop_monitor(sid: str, user=Depends(require_supervisor)):
         db.execute('UPDATE monitor_sessions SET state=?,stopped_at=? WHERE id=?',
                    (state, time.time(), sid))
         audit(db, user, 'monitor.' + state, sid)
-    return {'id': sid, 'state': state, 'note': 'Bridge must acknowledge PBX observe termination'}
+    return {'id': sid, 'state': state, 'note': 'Native media runtime must acknowledge observation termination'}
 
 
-@router.post('/monitor/bridge/claim')
+@router.post('/monitor/engine/claim')
 def claim_monitor(_=Depends(check_monitor_key)):
     if not config.monitoring_enabled:
         raise HTTPException(403, 'Monitoring disabled')
     with connection() as db:
         now = time.time()
-        hb = db.execute("SELECT * FROM connector_heartbeats WHERE source='aura-aes'").fetchone()
-        if not hb or not hb['cti_connected'] or now - hb['last_heartbeat'] > 30:
-            raise HTTPException(503, 'AES CTI heartbeat missing')
-        # A bridge reconnect must never auto-replay ambiguous start requests.
+        hb = db.execute("SELECT * FROM engine_heartbeats WHERE source='queuepilot-native'").fetchone()
+        if not hb or not hb['engine_healthy'] or now - hb['last_heartbeat'] > 30:
+            raise HTTPException(503, 'Native QueuePilot engine heartbeat missing')
+        # Native media engine reconnects must not replay ambiguous listen commands.
         db.execute("UPDATE monitor_sessions SET state='expired',stopped_at=? WHERE state='queued' AND approved_at<?",
                    (now, now - 90))
         db.execute("UPDATE monitor_sessions SET state='uncertain',stopped_at=? WHERE state='leased' AND leased_at<?",
@@ -286,10 +286,10 @@ def claim_monitor(_=Depends(check_monitor_key)):
         else:
             db.execute("UPDATE monitor_sessions SET state='stop_leased',leased_at=? WHERE id=? AND state='stop_requested'", (now,row['id']))
             action = 'stop_listen'
-        audit(db, 'monitor-bridge', 'monitor.' + action + '.leased', row['id'])
-        return {'command': {'id': row['id'], 'action': action, 'station': row['target_station'],
+        audit(db, 'native-monitor-engine', 'monitor.' + action + '.leased', row['id'])
+        return {'command': {'id': row['id'], 'action': action, 'extension': row['target_station'],
                             'call_id': row['external_call_id']},
-                'instruction': 'Authorized DMCC service observer only; never retry uncertain commands'}
+                'instruction': 'Native RTP media observer only; do not start without validated native mixer'}
 
 
 class MonitorResult(BaseModel):
@@ -298,8 +298,8 @@ class MonitorResult(BaseModel):
     message: str = Field(default='', max_length=160)
 
 
-@router.post('/monitor/bridge/sessions/{sid}/result')
-def monitor_bridge_result(sid: str, body: MonitorResult, _=Depends(check_monitor_key)):
+@router.post('/monitor/engine/sessions/{sid}/result')
+def monitor_engine_result(sid: str, body: MonitorResult, _=Depends(check_monitor_key)):
     with connection() as db:
         row = db.execute('SELECT state FROM monitor_sessions WHERE id=?', (sid,)).fetchone()
         if not row:
@@ -316,8 +316,8 @@ def monitor_bridge_result(sid: str, body: MonitorResult, _=Depends(check_monitor
                      stopped_at=CASE WHEN ?!='active' THEN ? ELSE stopped_at END
                      WHERE id=?''',
                    (updated,body.code,body.message,updated,time.time(),updated,time.time(),sid))
-        audit(db, 'monitor-bridge', 'monitor.' + updated, sid, body.code)
-    return {'id': sid, 'state': updated, 'bridge_reported': True}
+        audit(db, 'native-monitor-engine', 'monitor.' + updated, sid, body.code)
+    return {'id': sid, 'state': updated, 'engine_reported': True}
 
 
 # Memory-only relay for ONE uvicorn worker. Production requires a distributed
@@ -381,7 +381,7 @@ async def monitor_audio_socket(ws: WebSocket, sid: str):
             _media_subscribers.pop(sid, None)
 
 
-@router.post('/monitor/bridge/sessions/{sid}/audio', status_code=202)
+@router.post('/monitor/engine/sessions/{sid}/audio', status_code=202)
 async def receive_monitor_pcm(sid: str, request: Request, _=Depends(check_monitor_key)):
     if not config.monitoring_enabled:
         raise HTTPException(403, 'Monitoring disabled')
@@ -479,9 +479,8 @@ def validate_ivr_targets(db, graph: IvrGraph):
         if n.type == 'transfer':
             if not re.fullmatch(r'\d{2,8}', n.destination or ''):
                 raise HTTPException(422, 'Transfer destination must be a 2–8 digit internal extension')
-            if not (db.execute('SELECT 1 FROM aura_agent_bindings WHERE station=?', (n.destination,)).fetchone()
-                    or db.execute('SELECT 1 FROM aura_queue_bindings WHERE vdn=?', (n.destination,)).fetchone()):
-                raise HTTPException(422, 'IVR transfer destination must be an explicitly mapped station/VDN')
+            if not db.execute('SELECT 1 FROM agents WHERE extension=?', (n.destination,)).fetchone():
+                raise HTTPException(422, 'IVR transfer destination must be a QueuePilot agent extension')
 
 
 @router.get('/ivr')
@@ -502,7 +501,7 @@ def create_ivr(data: IvrCreate, user=Depends(require_admin)):
                      VALUES(?,?,?,?,?,?,?,?,?,?)''',
                    (fid,data.name,data.description,data.graph.model_dump_json(),'draft',1,user,user,now,now))
         audit(db, user, 'ivr.created', fid)
-    return {'id': fid, 'status': 'draft', 'pbx_changed': False}
+    return {'id': fid, 'status': 'draft', 'runtime_activated': False}
 
 
 @router.get('/ivr/{fid}')
@@ -525,7 +524,7 @@ def update_ivr(fid: str, data: IvrCreate, user=Depends(require_admin)):
         if row.rowcount != 1:
             raise HTTPException(409, 'Flow must be in draft state to edit')
         audit(db, user, 'ivr.updated', fid)
-    return {'id': fid, 'status': 'draft', 'pbx_changed': False}
+    return {'id': fid, 'status': 'draft', 'runtime_activated': False}
 
 
 class DeployReview(BaseModel):
@@ -539,9 +538,9 @@ def propose_ivr(fid: str, _: DeployReview, user=Depends(require_admin)):
                          (time.time(),fid))
         if row.rowcount != 1:
             raise HTTPException(409, 'IVR flow not found or not in draft')
-        audit(db, user, 'ivr.deployment.proposed', fid, 'Advisory only; CM unchanged')
-    return {'id': fid, 'status': 'proposed', 'pbx_changed': False,
-            'manual_work_required': 'Generate and review CM vectors/VDNs and media-server prompts before deploying'}
+        audit(db, user, 'ivr.deployment.proposed', fid, 'Draft review only; native IVR runtime not yet connected')
+    return {'id': fid, 'status': 'proposed', 'runtime_activated': False,
+            'manual_work_required': 'Implement and validate native IVR runtime, prompts, DTMF and activation controls'}
 
 
 ReportName = Literal['calls','queues','agents','intervals','sla','recordings','monitoring','ivr','audit','events']
@@ -615,7 +614,7 @@ def report_data(name: str, start: datetime | None = None, end: datetime | None =
                             updated_by,created_at,updated_at FROM ivr_flows
                             WHERE updated_at BETWEEN ? AND ? ORDER BY updated_at DESC''',(ts0,ts1))
         elif name == 'audit':
-            rows = db.execute('''SELECT at,actor,operation,entity_id,details FROM aura_audit
+            rows = db.execute('''SELECT at,actor,operation,entity_id,details FROM audit_log
                             WHERE at BETWEEN ? AND ? ORDER BY at DESC LIMIT 50000''',(ts0,ts1))
         else:  # events
             rows = db.execute('''SELECT event_id,source,event_type,call_id,agent_id,occurred_at,
@@ -629,7 +628,7 @@ def report_data(name: str, start: datetime | None = None, end: datetime | None =
             denom = (item['answered'] or 0) + (item['abandoned'] or 0)
             item['sla_percent'] = round(100*item['in_sla']/denom, 1) if denom else None
     return {'report': name, 'columns': columns, 'rows': result, 'from_utc': ts0, 'to_utc': ts1,
-            'max_rows': 50000, 'authority': 'QueuePilot CTI events (not Avaya CMS reconciled)'}
+            'max_rows': 50000, 'authority': 'QueuePilot event-derived data; incomplete until SIP runtime emits every lifecycle event'}
 
 
 def safe_csv_value(value):
@@ -652,7 +651,7 @@ def csv_bytes(report):
 @router.get('/reports')
 def report_catalog(user=Depends(require_supervisor)):
     return {'reports': list(REPORT_NAMES), 'formats': ['json','csv','zip'],
-            'note': 'These event-derived metrics must be reconciled with CMS for certified reporting'}
+            'note': 'Event-derived; not complete until native SIP runtime event delivery is validated'}
 
 
 @router.get('/reports/all.zip')

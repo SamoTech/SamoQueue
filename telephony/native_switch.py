@@ -18,6 +18,7 @@ import json
 import re
 import secrets
 import time
+from typing import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -98,8 +99,10 @@ class _Udp(asyncio.DatagramProtocol):
 
 
 class NativeSwitch:
-    def __init__(self,config:Config):
+    def __init__(self,config:Config, event_writer: Callable | None = None):
         self.config=config
+        self.event_writer=event_writer
+        self.event_feed_healthy=True
         self.acd=ACD(offer_seconds=config.offer_seconds)
         self.directory=PhoneDirectory(config.phone_networks)
         self.plan=IndependentCallPlan(SipIngressPlan(config.avaya_peers,config.did_routes),self.directory,self.acd)
@@ -140,6 +143,18 @@ class NativeSwitch:
     def emit(self,event:str,call:LiveCall):
         self.events.append({'event':event,'call_id':call.trunk_call_id,'queue':call.queue,'agent_id':call.agent_id,'at':time.time()})
         if len(self.events)>1000: self.events.pop(0)
+        if self.event_writer:
+            try:
+                self.event_writer(event, call)
+                self.event_feed_healthy=True
+            except Exception:
+                # A reporting failure must never corrupt SIP/ACD call state.
+                # Health is marked failed so the dashboard cannot claim success.
+                self.event_feed_healthy=False
+                self.errors.append('native_event_delivery_failed')
+                if len(self.errors)>1000: self.errors.pop(0)
+                try: self.event_writer.heartbeat(False)
+                except Exception: pass
 
     def send(self,data:bytes,addr:tuple[str,int]):
         if self.transport:
@@ -462,14 +477,35 @@ async def _main():
     parser=argparse.ArgumentParser(description='QueuePilot native UDP SIP lab gateway (no Asterisk)')
     parser.add_argument('--config',required=True,help='Local JSON configuration (never commit real credentials)')
     parser.add_argument('--lab',action='store_true',help='Explicitly acknowledge nonproduction lab limitations')
+    parser.add_argument('--local-events',action='store_true',help='Opt in to writing native call events directly into the local QueuePilot dashboard DB')
     args=parser.parse_args()
     if not args.lab:parser.error('Native SIP runtime is LAB-ONLY; pass --lab')
     config=config_from_json(Path(args.config))
-    server=NativeSwitch(config)
+    writer=None
+    if args.local_events:
+        from .local_events import LocalEventWriter
+        writer=LocalEventWriter(config.did_routes,config.agent_bindings)
+    server=NativeSwitch(config,event_writer=writer)
     await server.start()
+    if writer: writer.heartbeat(True)
     print(f'QueuePilot LAB SIP gateway listening on {config.listen_ip}:{config.listen_port}; no production support')
+    async def health_loop():
+        while True:
+            await asyncio.sleep(10)
+            if writer:
+                try: writer.heartbeat(server.event_feed_healthy)
+                except Exception: server.errors.append('native_health_write_failed')
+    health_task=asyncio.create_task(health_loop()) if writer else None
     try: await asyncio.Event().wait()
-    finally: await server.stop()
+    finally:
+        if health_task:
+            health_task.cancel()
+            try: await health_task
+            except asyncio.CancelledError: pass
+        await server.stop()
+        if writer:
+            try: writer.heartbeat(False)
+            except Exception: pass
 
 
 if __name__=='__main__':

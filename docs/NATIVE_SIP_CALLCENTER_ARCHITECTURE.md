@@ -82,13 +82,16 @@ Signaling alone will NOT record or let the supervisor listen. QueuePilot must an
 - No Asterisk/FreeSWITCH installation/service exists in the deployment.
 - Failing the phone/QueuePilot/Avaya link does not corrupt state or leave untracked calls.
 
-### Older lab-only OPTIONS probe
+### v0.7 management integration
 
-```
-python -m telephony.sip_probe
-```
-
-Listens on **127.0.0.1:15060/UDP** for local SIP `OPTIONS`, returns `200` on valid OPTIONS and **503 on INVITE** to prevent accidental calls. This is deliberately **NOT** a functioning SIP switch and must **not** be registered as a production Avaya SIP entity. No actual calls/media occur. Only expose a non-loopback bind in an isolated lab with trusted peers.
+`telephony/local_events.py` optionally stores native SIP lifecycle events in the
+same QueuePilot SQLite database used by `app/`. Start the local SIP lab with
+`--lab --local-events` after creating matching QueuePilot queue and agent IDs.
+No external CTI, AES or middleware is used. This is a synchronous single-host
+lab adapter only; a durable WAL/replay mechanism and runtime-to-dashboard
+presence synchronization are still missing. The legacy OPTIONS-only tool,
+AES/WTI control plane, external CTI examples, and historical PBX documents
+were removed. The in-process `NativeSwitch` handles SIP OPTIONS itself.
 
 ### Compatibility inventory needed before live development
 

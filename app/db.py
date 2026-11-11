@@ -48,30 +48,11 @@ def init_db():
             outcome TEXT NOT NULL, PRIMARY KEY (source,event_id)
         );
         CREATE INDEX IF NOT EXISTS idx_events_occurred ON events(occurred_at);
-        CREATE TABLE IF NOT EXISTS connector_heartbeats (
-            source TEXT PRIMARY KEY, cti_connected INTEGER NOT NULL,
+        CREATE TABLE IF NOT EXISTS engine_heartbeats (
+            source TEXT PRIMARY KEY, engine_healthy INTEGER NOT NULL,
             last_heartbeat REAL NOT NULL, details TEXT NOT NULL DEFAULT ''
         );
-        CREATE TABLE IF NOT EXISTS aura_queue_bindings (
-            queue_id TEXT PRIMARY KEY REFERENCES queues(id) ON DELETE CASCADE,
-            vdn TEXT UNIQUE, skill_number TEXT UNIQUE, vector_number TEXT,
-            updated_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS aura_agent_bindings (
-            agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
-            station TEXT UNIQUE NOT NULL, login_id TEXT UNIQUE,
-            updated_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS aura_commands (
-            id TEXT PRIMARY KEY, request_key TEXT NOT NULL UNIQUE,
-            action TEXT NOT NULL, station TEXT NOT NULL, call_id TEXT,
-            destination TEXT, agent_login TEXT, desired_state TEXT,
-            status TEXT NOT NULL, created_by TEXT NOT NULL,
-            created_at REAL NOT NULL, approved_at REAL, leased_at REAL,
-            finished_at REAL, result_code TEXT, result_message TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_aura_commands_state ON aura_commands(status,approved_at);
-        CREATE TABLE IF NOT EXISTS aura_audit (
+        CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL,
             actor TEXT NOT NULL, operation TEXT NOT NULL,
             entity_id TEXT NOT NULL, details TEXT NOT NULL DEFAULT ''
@@ -99,10 +80,12 @@ def init_db():
             created_by TEXT NOT NULL, updated_by TEXT NOT NULL,
             created_at REAL NOT NULL, updated_at REAL NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS aura_routing_plans (
-            id TEXT PRIMARY KEY, queue_id TEXT NOT NULL REFERENCES queues(id),
-            change_type TEXT NOT NULL, desired TEXT NOT NULL,
-            reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'proposed',
-            created_at REAL NOT NULL, created_by TEXT NOT NULL
-        );
         ''')
+
+    # Safe migration of *audit history only*. Obsolete PBX tables in existing databases
+    # are retained (not used) to avoid destructive upgrades without an operator backup.
+    with connection() as db:
+        legacy = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='aura_audit'").fetchone()
+        if legacy:
+            db.execute('''INSERT OR IGNORE INTO audit_log(id,at,actor,operation,entity_id,details)
+                          SELECT id,at,actor,operation,entity_id,details FROM aura_audit''')

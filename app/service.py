@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from .config import config
 from .db import connection
-from .models import AvayaEvent
+from .models import EngineEvent
 
 
 def mask_caller(value: str | None) -> str:
@@ -19,7 +19,7 @@ def mask_caller(value: str | None) -> str:
     return '••• ••• ' + digits[-4:]
 
 
-def ingest(event: AvayaEvent):
+def ingest(event: EngineEvent):
     occurred = event.occurred_at.timestamp()
     now = time.time()
     if occurred > now + 300:
@@ -105,7 +105,7 @@ def ingest(event: AvayaEvent):
                                ('completed', occurred, occurred, call['id']))
                     outcome = 'updated'
         # Ending a call revokes browser live-audio access immediately and queues
-        # an observer disconnect for the external PBX bridge.
+        # a native media observer stop (runtime implementation is pending).
         if event.type in ('call.completed','call.abandoned') and outcome in ('updated','created_with_missing_queue_event','created_with_missing_start_event'):
             end_call = db.execute('SELECT id FROM calls WHERE source=? AND external_id=?',
                                   (event.source,event.call_id)).fetchone()
@@ -139,7 +139,7 @@ def dashboard():
         today_calls = [dict(x) for x in db.execute('''SELECT queue_id,status,arrived_at,answered_at,ended_at
                      FROM calls WHERE arrived_at >= ?''', (today,))]
         event_latest = db.execute('SELECT source,received_at FROM events ORDER BY received_at DESC LIMIT 1').fetchone()
-        heartbeat = db.execute('SELECT * FROM connector_heartbeats ORDER BY last_heartbeat DESC LIMIT 1').fetchone()
+        heartbeat = db.execute("SELECT * FROM engine_heartbeats WHERE source='queuepilot-native' ORDER BY last_heartbeat DESC LIMIT 1").fetchone()
         daily = [dict(x) for x in db.execute('''SELECT date(arrived_at,'unixepoch') AS utc_day,
                   SUM(CASE WHEN answered_at IS NOT NULL THEN 1 ELSE 0 END) answered,
                   SUM(CASE WHEN status='abandoned' THEN 1 ELSE 0 END) abandoned
@@ -178,14 +178,14 @@ def dashboard():
              'total_queues': len(queues)}
     return {'totals': total, 'queues': queues, 'agents': agents, 'calls': calls,
             'daily': daily, 'integration': {
-                'mode': 'DEMO' if config.demo_mode else 'LIVE INGEST',
+                'mode': 'DEMO' if config.demo_mode else 'NATIVE ENGINE',
                 'last_event_at': event_latest['received_at'] if event_latest else None,
                 'last_source': event_latest['source'] if event_latest else None,
-                'connected': bool(heartbeat and heartbeat['cti_connected'] and now-heartbeat['last_heartbeat'] <= 30),
-                'bridge_source': heartbeat['source'] if heartbeat else None,
-                'bridge_details': heartbeat['details'] if heartbeat else None,
+                'connected': bool(heartbeat and heartbeat['engine_healthy'] and now-heartbeat['last_heartbeat'] <= 30),
+                'engine_source': heartbeat['source'] if heartbeat else None,
+                'engine_details': heartbeat['details'] if heartbeat else None,
                 'last_heartbeat': heartbeat['last_heartbeat'] if heartbeat else None,
-                'ingestion_ready': True,
+                'engine_event_ingestion_ready': True,
                 }, 'server_time': now, 'timezone': config.timezone}
 
 
@@ -225,19 +225,19 @@ def seed_demo():
         queue = ids[(i*7) % len(ids)]
         t = moment - dt.timedelta(minutes=(i+1)*12)
         cid = f'demo-history-{i}'
-        ingest(AvayaEvent(event_id=f'{cid}-q', source='demo', type='call.queued', call_id=cid,
+        ingest(EngineEvent(event_id=f'{cid}-q', source='demo', type='call.queued', call_id=cid,
                           queue_id=queue, caller='20255501'+str(i%100).zfill(2), occurred_at=t))
         if i % 9 == 0:
-            ingest(AvayaEvent(event_id=f'{cid}-a', source='demo', type='call.abandoned', call_id=cid,
+            ingest(EngineEvent(event_id=f'{cid}-a', source='demo', type='call.abandoned', call_id=cid,
                               queue_id=queue, occurred_at=t+dt.timedelta(seconds=8+i%40)))
         else:
             at = t+dt.timedelta(seconds=(i*7)%48+3)
-            ingest(AvayaEvent(event_id=f'{cid}-ans', source='demo', type='call.answered', call_id=cid,
+            ingest(EngineEvent(event_id=f'{cid}-ans', source='demo', type='call.answered', call_id=cid,
                               queue_id=queue, agent_id=aids[i%len(aids)], occurred_at=at))
-            ingest(AvayaEvent(event_id=f'{cid}-end', source='demo', type='call.completed', call_id=cid,
+            ingest(EngineEvent(event_id=f'{cid}-end', source='demo', type='call.completed', call_id=cid,
                               queue_id=queue, occurred_at=at+dt.timedelta(minutes=2+i%4)))
     for i in range(5):
         t = moment - dt.timedelta(seconds=25+i*13)
-        ingest(AvayaEvent(event_id=f'demo-live-{i}', source='demo', type='call.queued',
+        ingest(EngineEvent(event_id=f'demo-live-{i}', source='demo', type='call.queued',
                           call_id=f'demo-live-{i}', queue_id=ids[i%len(ids)], caller='2025550199', occurred_at=t))
     return {'seeded': True, 'queues': len(ids), 'agents': len(aids)}

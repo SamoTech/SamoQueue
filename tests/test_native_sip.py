@@ -3,7 +3,6 @@ import pytest
 from telephony.acd import ACD
 from telephony.native_sip import (IngressRoute, IndependentCallPlan, PhoneContact,
                                   PhoneDirectory, RoutingError, SipIngressPlan)
-from telephony.sip_probe import sip_probe_response
 
 
 class Clock:
@@ -74,33 +73,3 @@ def test_unregistered_agent_is_never_selected_and_stays_ready():
     assert acd.calls['call-A'].state == 'waiting'
 
 
-SIP_OPTIONS = (b'OPTIONS sip:6000@127.0.0.1 SIP/2.0\r\n'
-               b'Via: SIP/2.0/UDP 127.0.0.1:5060;branch=z9hG4bK77\r\n'
-               b'From: <sip:probe@127.0.0.1>;tag=abc\r\n'
-               b'To: <sip:6000@127.0.0.1>\r\n'
-               b'Call-ID: test-123\r\n'
-               b'CSeq: 1 OPTIONS\r\n'
-               b'Content-Length: 0\r\n\r\n')
-
-
-def test_probe_answers_options_from_allowed_peer():
-    res=sip_probe_response(SIP_OPTIONS, '127.0.0.1')
-    assert b'SIP/2.0 200 OK' in res
-    assert b'Call-ID: test-123' in res
-    assert res.endswith(b'Content-Length: 0\r\n\r\n')
-
-
-def test_probe_does_not_accept_invite_while_media_missing():
-    req=SIP_OPTIONS.replace(b'OPTIONS sip:', b'INVITE sip:').replace(b'1 OPTIONS',b'1 INVITE')
-    assert b'SIP/2.0 503 Service Unavailable' in sip_probe_response(req,'127.0.0.1')
-
-
-def test_probe_rejects_untrusted_and_oversized_requests():
-    assert sip_probe_response(SIP_OPTIONS, '10.1.1.1') is None
-    assert sip_probe_response(SIP_OPTIONS + b'X'*5000,'127.0.0.1') is None
-
-
-def test_probe_rejects_header_injection_duplicate_and_cseq_mismatch():
-    assert sip_probe_response(SIP_OPTIONS.replace(b'Call-ID: test-123', b'Call-ID: test-123\r\nCall-ID: dup'),'127.0.0.1') is None
-    assert sip_probe_response(SIP_OPTIONS.replace(b'1 OPTIONS',b'1 INVITE'),'127.0.0.1') is None
-    assert sip_probe_response(SIP_OPTIONS.replace(b'From:',b' From:'),'127.0.0.1') is None

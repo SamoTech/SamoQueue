@@ -13,10 +13,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from .config import config, validate_config
 from .db import connection, init_db
-from .models import AgentIn, AgentStatusIn, AvayaEvent, ConnectorHeartbeat, Login, QueueIn
-from .security import encode_token, require_admin, require_ingest, require_supervisor
+from .models import AgentIn, AgentStatusIn, EngineEvent, EngineHeartbeat, Login, QueueIn
+from .security import encode_token, require_admin, require_engine_event, require_supervisor
 from .service import create_agent, create_queue, dashboard, ingest, seed_demo
-from .aura import router as aura_router
 from .contact_center import router as contact_center_router
 
 @asynccontextmanager
@@ -25,9 +24,8 @@ async def lifespan(app: FastAPI):
     init_db()
     yield
 
-app = FastAPI(title='QueuePilot Independent Contact Center', version='0.5.0-foundation', lifespan=lifespan,
-              description='Standalone ACD/management prototype; native SIP call switching and RTP media are not yet operational.')
-app.include_router(aura_router)
+app = FastAPI(title='QueuePilot Independent Contact Center', version='0.7.0-cleanup', lifespan=lifespan,
+              description='Independent QueuePilot SIP/ACD laboratory architecture; no AES/WTI management APIs. Not production-ready.')
 app.include_router(contact_center_router)
 static_root = Path(__file__).parent / 'static'
 app.mount('/static', StaticFiles(directory=static_root), name='static')
@@ -38,7 +36,7 @@ def index():
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.5.0-foundation'}
+    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.7.0-cleanup'}
 
 # Single administrator for development/MVP. Use enterprise SSO and proper RBAC in production.
 login_attempts = {}
@@ -86,25 +84,29 @@ def add_agent(agent: AgentIn, _=Depends(require_admin)):
 
 @app.patch('/api/agents/{aid}/status')
 def edit_status(aid: str, status: AgentStatusIn, _=Depends(require_admin)):
-    # Only edits the local dashboard record; never claims to set a state on the Avaya PBX.
+    # Dashboard directory only. Native SIP agent state synchronization is not yet wired.
     with connection() as db:
         cursor = db.execute('UPDATE agents SET status=?,last_change=? WHERE id=?',
                             (status.status, time.time(), aid))
         if cursor.rowcount != 1:
             raise HTTPException(404, 'Agent not found')
-    return {'id': aid, 'updated': True, 'scope': 'local_dashboard_only'}
+    return {'id': aid, 'updated': True, 'scope': 'directory_only_not_sip_runtime'}
 
-@app.post('/api/integrations/events')
-def receive_event(event: AvayaEvent, _=Depends(require_ingest)):
+@app.post('/api/engine/events')
+def receive_event(event: EngineEvent, _=Depends(require_engine_event)):
+    if event.source != 'queuepilot-native':
+        raise HTTPException(422, 'Only native QueuePilot engine events are accepted')
     return ingest(event)
 
-@app.post('/api/integrations/heartbeat')
-def connector_heartbeat(body: ConnectorHeartbeat, _=Depends(require_ingest)):
-    # An authenticated CTI bridge must only report true after it has confirmed its upstream CTI monitor session.
+@app.post('/api/engine/heartbeat')
+def engine_heartbeat(body: EngineHeartbeat, _=Depends(require_engine_event)):
+    if body.source != 'queuepilot-native':
+        raise HTTPException(422, 'Only the native QueuePilot engine may report health')
+    # This is reported runtime health, not an independently validated SIP/media session.
     with connection() as db:
-        db.execute('''INSERT INTO connector_heartbeats(source,cti_connected,last_heartbeat,details)
+        db.execute('''INSERT INTO engine_heartbeats(source,engine_healthy,last_heartbeat,details)
                       VALUES(?,?,?,?) ON CONFLICT(source) DO UPDATE SET
-                      cti_connected=excluded.cti_connected,
+                      engine_healthy=excluded.engine_healthy,
                       last_heartbeat=excluded.last_heartbeat,
                       details=excluded.details''',
                    (body.source, int(body.connected), time.time(), body.details))
@@ -150,7 +152,7 @@ def demo_step(_=Depends(require_admin)):
     if open_calls and decision < .48:
         c = random.choice(open_calls)
         event_type = 'call.abandoned' if decision < .13 else 'call.answered'
-        event = AvayaEvent(event_id=uuid.uuid4().hex, source='demo', type=event_type,
+        event = EngineEvent(event_id=uuid.uuid4().hex, source='demo', type=event_type,
                            call_id=c['external_id'], queue_id=c['queue_id'],
                            agent_id=random.choice(agents) if event_type == 'call.answered' and agents else None,
                            occurred_at=now)
@@ -160,12 +162,12 @@ def demo_step(_=Depends(require_admin)):
             talking = [dict(r) for r in db.execute("SELECT * FROM calls WHERE source='demo' AND status='answered'")]
         if talking:
             c = random.choice(talking)
-            result = ingest(AvayaEvent(event_id=uuid.uuid4().hex, source='demo', type='call.completed',
+            result = ingest(EngineEvent(event_id=uuid.uuid4().hex, source='demo', type='call.completed',
                                        call_id=c['external_id'], queue_id=c['queue_id'], occurred_at=now))
         else:
             result = {'outcome': 'no_calls_to_complete'}
     else:
         cid = 'demo-' + uuid.uuid4().hex[:12]
-        result = ingest(AvayaEvent(event_id=uuid.uuid4().hex, source='demo', type='call.queued',
+        result = ingest(EngineEvent(event_id=uuid.uuid4().hex, source='demo', type='call.queued',
                                    call_id=cid, queue_id=random.choice(qs), caller='2025550100', occurred_at=now))
     return result

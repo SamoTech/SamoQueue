@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 os.environ['APP_ADMIN_PASSWORD'] = 'testing-password-not-production'
 os.environ['APP_SECRET'] = 'test-secret-key-at-least-thirty-two-characters-long-123'
-os.environ['AVAYA_INGEST_KEY'] = 'test-ingestion-key-at-least-thirty-two-characters-long'
+os.environ['ENGINE_EVENT_KEY'] = 'test-ingestion-key-at-least-thirty-two-characters-long'
 
 from fastapi.testclient import TestClient
 from app.main import app
@@ -19,15 +19,14 @@ def build(tmp_path):
     config.db_path = tmp_path / 'queue.db'
     config.admin_password = 'testing-password-not-production'
     config.secret = 'test-secret-key-at-least-thirty-two-characters-long-123'
-    config.ingest_key = 'test-ingestion-key-at-least-thirty-two-characters-long'
+    config.engine_event_key = 'test-ingestion-key-at-least-thirty-two-characters-long'
     config.reviewer_user = 'reviewer'
     config.reviewer_password = 'separate-reviewer-password-at-least-12'
     config.recordings_enabled = True
-    config.recording_bridge_key = 'record-key-at-least-32-chars-not-in-other-keys'
+    config.recording_engine_key = 'record-key-at-least-32-chars-not-in-other-keys'
     config.recording_dir = tmp_path / 'media'
     config.monitoring_enabled = True
-    config.monitor_bridge_key = 'monitor-key-at-least-32-chars-not-in-other-keys'
-    config.aura_control_enabled = False
+    config.monitor_engine_key = 'monitor-key-at-least-32-chars-not-in-other-keys'
     with TestClient(app) as client:
         admin_login=client.post('/api/login',json={'username':'admin','password':config.admin_password})
         assert admin_login.status_code == 200, admin_login.text
@@ -38,8 +37,6 @@ def build(tmp_path):
         assert client.get('/api/dashboard',headers=reviewer).status_code == 200
         queue=client.post('/api/queues',headers=admin,json={'name':'Customer support'}).json()['id']
         agent=client.post('/api/agents',headers=admin,json={'name':'QA Agent','extension':'4101','queue_id':queue}).json()['id']
-        assert client.put(f'/api/aura/queues/{queue}/binding',headers=admin,json={'vdn':'65001','skill_number':'87'}).status_code==200
-        assert client.put(f'/api/aura/agents/{agent}/binding',headers=admin,json={'station':'4101','login_id':'2024'}).status_code==200
         yield client,admin,reviewer,queue,agent
     config.monitoring_enabled=False
     config.recordings_enabled=False
@@ -48,10 +45,10 @@ def build(tmp_path):
 def create_call(client,queue,agent,bridge,kind='answered'):
     now=datetime.now(timezone.utc).isoformat()
     call='cti-call-123'
-    queued={'event_id':'e-q','event_type':'call.queued','call_id':call,'vdn':'65001','occurred_at':now}
-    answered={'event_id':'e-a','event_type':'call.answered','call_id':call,'vdn':'65001','agent_station':'4101','occurred_at':now}
-    assert client.post('/api/aura/events',json=queued,headers=bridge).status_code==200
-    assert client.post('/api/aura/events',json=answered,headers=bridge).status_code==200
+    queued={'event_id':'e-q','type':'call.queued','call_id':call,'source':'queuepilot-native','queue_id':queue,'occurred_at':now}
+    answered={'event_id':'e-a','type':'call.answered','call_id':call,'source':'queuepilot-native','queue_id':queue,'agent_id':agent,'occurred_at':now}
+    assert client.post('/api/engine/events',json=queued,headers=bridge).status_code==200
+    assert client.post('/api/engine/events',json=answered,headers=bridge).status_code==200
     with connection() as db:
         return db.execute('SELECT id FROM calls WHERE external_id=?',(call,)).fetchone()['id']
 
@@ -66,10 +63,10 @@ def wav_bytes():
 
 def test_recording_import_playback_dedup_auth_and_validation(tmp_path):
     for c,admin,reviewer,q,a in build(tmp_path):
-        bridge={'X-Integration-Key':config.ingest_key}
+        bridge={'X-Engine-Key':config.engine_event_key}
         create_call(c,q,a,bridge)
-        path='/api/cc/recordings/import?source=aura-aes&call_id=cti-call-123&consent_attested=true'
-        auth={'X-Recording-Bridge-Key':config.recording_bridge_key,'Content-Type':'audio/wav'}
+        path='/api/cc/recordings/import?source=queuepilot-native&call_id=cti-call-123&consent_attested=true'
+        auth={'X-Recording-Engine-Key':config.recording_engine_key,'Content-Type':'audio/wav'}
         audio=wav_bytes()
         assert c.post(path,content=audio).status_code==401
         assert c.post(path.replace('true','false'),headers=auth,content=audio).status_code==422
@@ -89,7 +86,7 @@ def test_recording_import_playback_dedup_auth_and_validation(tmp_path):
         assert c.post(path,headers=auth,content=b'not an audio file').status_code==422
         assert not list(config.recording_dir.glob('*.part'))
         with connection() as db:
-            events=[x['operation'] for x in db.execute('SELECT operation FROM aura_audit')]
+            events=[x['operation'] for x in db.execute('SELECT operation FROM audit_log')]
         assert 'recording.imported' in events and 'recording.playback' in events
 
 
@@ -108,7 +105,7 @@ def test_ivr_graph_validation_approval_and_report_exports(tmp_path):
         bad={'name':'Bad menu','graph':{'nodes':[{'id':'entry','type':'start','label':'entry','next':'missing'},
             {'id':'end','type':'hangup','label':'end'}]}}
         assert c.post('/api/cc/ivr',json=bad,headers=admin).status_code==422
-        assert c.post(f'/api/cc/ivr/{fid}/propose-deployment',json={'confirmation':'PROPOSE IVR DEPLOYMENT'},headers=admin).json()['pbx_changed'] is False
+        assert c.post(f'/api/cc/ivr/{fid}/propose-deployment',json={'confirmation':'PROPOSE IVR DEPLOYMENT'},headers=admin).json()['runtime_activated'] is False
         assert c.put(f'/api/cc/ivr/{fid}',json=body,headers=admin).status_code==409
         all_zip=c.get('/api/cc/reports/all.zip',headers=reviewer)
         assert all_zip.status_code==200
@@ -122,10 +119,10 @@ def test_ivr_graph_validation_approval_and_report_exports(tmp_path):
         assert c.get('/api/cc/reports/calls.csv').status_code==401
 
 
-def test_monitoring_requires_second_identity_and_real_bridge_ack(tmp_path):
+def test_monitoring_requires_second_identity_and_native_engine_ack(tmp_path):
     for c,admin,reviewer,q,a in build(tmp_path):
-        bridge={'X-Integration-Key':config.ingest_key}
-        monitoring_bridge={'X-Monitor-Bridge-Key':config.monitor_bridge_key}
+        bridge={'X-Engine-Key':config.engine_event_key}
+        monitoring_bridge={'X-Monitor-Engine-Key':config.monitor_engine_key}
         callid=create_call(c,q,a,bridge)
         res=c.post('/api/cc/monitor/sessions',json={'call_id':callid},headers=admin)
         assert res.status_code==201,res.text
@@ -133,31 +130,31 @@ def test_monitoring_requires_second_identity_and_real_bridge_ack(tmp_path):
         assert c.post(f'/api/cc/monitor/sessions/{sid}/approve',json={'confirmation':'APPROVE LIVE LISTEN'},headers=admin).status_code==403
         assert c.post(f'/api/cc/monitor/sessions/{sid}/approve',json={'confirmation':'NO'},headers=reviewer).status_code==422
         assert c.post(f'/api/cc/monitor/sessions/{sid}/approve',json={'confirmation':'APPROVE LIVE LISTEN'},headers=reviewer).status_code==200
-        assert c.post('/api/cc/monitor/bridge/claim',headers=bridge).status_code==401
-        assert c.post('/api/cc/monitor/bridge/claim',headers=monitoring_bridge).status_code==503
-        assert c.post('/api/integrations/heartbeat',json={'source':'aura-aes','connected':True,'details':'test stub'},headers=bridge).status_code==200
-        claimed=c.post('/api/cc/monitor/bridge/claim',headers=monitoring_bridge).json()['command']
+        assert c.post('/api/cc/monitor/engine/claim',headers=bridge).status_code==401
+        assert c.post('/api/cc/monitor/engine/claim',headers=monitoring_bridge).status_code==503
+        assert c.post('/api/engine/heartbeat',json={'source':'queuepilot-native','connected':True,'details':'test stub'},headers=bridge).status_code==200
+        claimed=c.post('/api/cc/monitor/engine/claim',headers=monitoring_bridge).json()['command']
         assert claimed['id']==sid and claimed['action']=='start_listen'
-        assert c.post('/api/cc/monitor/bridge/claim',headers=monitoring_bridge).json()['command'] is None
+        assert c.post('/api/cc/monitor/engine/claim',headers=monitoring_bridge).json()['command'] is None
         assert c.post(f'/api/cc/monitor/sessions/{sid}/audio-ticket',headers=reviewer).status_code==409
-        assert c.post(f'/api/cc/monitor/bridge/sessions/{sid}/result',headers=monitoring_bridge,json={'result':'active','code':'DMCC_CONFIRMED'}).status_code==200
+        assert c.post(f'/api/cc/monitor/engine/sessions/{sid}/result',headers=monitoring_bridge,json={'result':'active','code':'NATIVE_MEDIA_CONFIRMED'}).status_code==200
         assert c.post(f'/api/cc/monitor/sessions/{sid}/audio-ticket',headers=admin).status_code==403
         ticket=c.post(f'/api/cc/monitor/sessions/{sid}/audio-ticket',headers=reviewer)
         assert ticket.status_code==200,ticket.text
         t=ticket.json()['ticket']
         with c.websocket_connect(f'/api/cc/monitor/sessions/{sid}/audio/ws?ticket={t}') as ws:
             packet=bytes(3200)
-            result=c.post(f'/api/cc/monitor/bridge/sessions/{sid}/audio',headers={**monitoring_bridge,'Content-Type':'application/octet-stream'},content=packet)
+            result=c.post(f'/api/cc/monitor/engine/sessions/{sid}/audio',headers={**monitoring_bridge,'Content-Type':'application/octet-stream'},content=packet)
             assert result.status_code==202,result.text
             assert result.json()['browser_listeners']==1
             assert ws.receive_bytes()==packet
         assert c.post(f'/api/cc/monitor/sessions/{sid}/audio-ticket',headers=reviewer).status_code==200
-        # CTI call completion revokes playback and creates an Avaya observer-stop instruction.
-        end={'event_id':'e-completed','event_type':'call.completed','call_id':'cti-call-123',
-             'vdn':'65001','occurred_at':datetime.now(timezone.utc).isoformat()}
-        assert c.post('/api/aura/events',json=end,headers=bridge).status_code==200
+        # Native SIP call completion revokes playback and queues observer stop.
+        end={'event_id':'e-completed','type':'call.completed','call_id':'cti-call-123',
+             'source':'queuepilot-native','queue_id':q,'occurred_at':datetime.now(timezone.utc).isoformat()}
+        assert c.post('/api/engine/events',json=end,headers=bridge).status_code==200
         assert c.post(f'/api/cc/monitor/sessions/{sid}/audio-ticket',headers=reviewer).status_code==409
-        stop=c.post('/api/cc/monitor/bridge/claim',headers=monitoring_bridge).json()['command']
+        stop=c.post('/api/cc/monitor/engine/claim',headers=monitoring_bridge).json()['command']
         assert stop['action']=='stop_listen'
-        assert c.post(f'/api/cc/monitor/bridge/sessions/{sid}/result',json={'result':'ended'},headers=monitoring_bridge).status_code==200
+        assert c.post(f'/api/cc/monitor/engine/sessions/{sid}/result',json={'result':'ended'},headers=monitoring_bridge).status_code==200
         assert c.get('/api/cc/monitor/sessions',headers=reviewer).json()['sessions'][0]['state']=='ended'
