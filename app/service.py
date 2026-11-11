@@ -104,6 +104,16 @@ def ingest(event: AvayaEvent):
                     db.execute('UPDATE calls SET status=?,ended_at=?,last_event_at=? WHERE id=?',
                                ('completed', occurred, occurred, call['id']))
                     outcome = 'updated'
+        # Ending a call revokes browser live-audio access immediately and queues
+        # an observer disconnect for the external PBX bridge.
+        if event.type in ('call.completed','call.abandoned') and outcome in ('updated','created_with_missing_queue_event','created_with_missing_start_event'):
+            end_call = db.execute('SELECT id FROM calls WHERE source=? AND external_id=?',
+                                  (event.source,event.call_id)).fetchone()
+            if end_call:
+                db.execute("UPDATE monitor_sessions SET state='stop_requested',stopped_at=? WHERE call_id=? AND state IN ('active','leased')",
+                           (time.time(),end_call['id']))
+                db.execute("UPDATE monitor_sessions SET state='cancelled',stopped_at=? WHERE call_id=? AND state IN ('pending_approval','queued')",
+                           (time.time(),end_call['id']))
         db.execute('UPDATE events SET outcome=? WHERE source=? AND event_id=?',
                    (outcome, event.source, event.event_id))
     return {'outcome': outcome, 'event_id': event.event_id}
