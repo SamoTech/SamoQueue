@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .acd import ACD
+from .ivr import IvrMenu, IvrSession
 from .native_sip import PhoneDirectory, PhoneContact, SipIngressPlan, IngressRoute, IndependentCallPlan, RoutingError
 from .rtp_media import RtpRelay
 from .sip_stack import Message, RegistrarAuth, SipError, MediaAddress, packet, parse_message, response, uri_user, header_uri, parse_sdp, sdp_offer
@@ -44,6 +45,7 @@ class Config:
     offer_seconds: int=20
     record_directory:Path|None=None
     recording_notice_confirmed:bool=False
+    ivr_menus:tuple[IvrMenu,...]=()
 
     def __post_init__(self):
         if not self.avaya_peers or not self.phone_networks or not self.media_networks or not self.did_routes or not self.agent_bindings:
@@ -64,6 +66,15 @@ class Config:
             raise ValueError('Recording requires notice/consent policy confirmation')
         if self.offer_seconds<2:
             raise ValueError('Invalid offer timeout')
+        route_dids={r.did for r in self.did_routes}
+        route_queues={r.queue for r in self.did_routes}
+        ivr_dids=set()
+        for menu in self.ivr_menus:
+            if menu.did in ivr_dids or menu.did not in route_dids:
+                raise ValueError('IVR DID must reference a configured ingress route')
+            ivr_dids.add(menu.did)
+            if not set(menu.digits.values()).issubset(route_queues) or (menu.fallback_queue is not None and menu.fallback_queue not in route_queues):
+                raise ValueError('IVR destinations must be approved QueuePilot queues')
 
 
 @dataclass
@@ -89,6 +100,8 @@ class LiveCall:
     invite_response:bytes|None=None
     created_at:float=field(default_factory=time.monotonic)
     answered_at:float|None=None
+    ivr:IvrSession|None=None
+    trunk_established:bool=False
 
 
 class _Udp(asyncio.DatagramProtocol):
@@ -110,6 +123,8 @@ class NativeSwitch:
         self.directory=PhoneDirectory(config.phone_networks)
         self.plan=IndependentCallPlan(SipIngressPlan(config.avaya_peers,config.did_routes),self.directory,self.acd)
         self.auth=RegistrarAuth(config.sip_realm,config.extension_passwords,config.nonce_secret)
+        self.ivr_menus={menu.did:menu for menu in config.ivr_menus}
+        self.routes_by_queue={route.queue:route for route in config.did_routes}
         for agent,(extension,skills) in config.agent_bindings.items():
             self.acd.upsert_agent(agent,set(skills),'ready')
             self.plan.bind_agent(agent,extension)
@@ -247,6 +262,9 @@ class NativeSwitch:
             called=uri_user(msg.uri)
             route=self.plan.ingress.admit(addr[0],called)
             incoming=parse_sdp(msg.body,self.config.media_networks)
+            menu=self.ivr_menus.get(called)
+            if menu and incoming.dtmf_payload is None:
+                raise SipError('IVR requires negotiated RFC4733 telephone-event')
         except PermissionError:
             self.send(response(msg,403),addr);return
         except RoutingError:
@@ -261,13 +279,23 @@ class NativeSwitch:
         relay.set_remote('trunk',incoming)
         call=LiveCall(call_id,msg,addr,route.queue,relay,incoming)
         self.calls[call_id]=call
-        self.plan.incoming(call_id,addr[0],called)
-        self.emit('call.queued',call)
         self.send(response(msg,100),addr)
-        ringing=response(msg,180,to_tag=call.local_tag)
-        self.send(ringing,addr)
-        call.invite_response=ringing
-        await self._dispatch()
+        if menu:
+            # IVR answers on QueuePilot; do not offer an agent before DTMF.
+            call.ivr=IvrSession(menu)
+            call.state='ivr_wait_ack'
+            fields=[('Contact',f'<sip:queuepilot@{self.config.advertised_ip}:{self.config.listen_port}>'),('Content-Type','application/sdp')]
+            ok=response(msg,200,fields,sdp_offer(self.config.advertised_ip,relay.local_port('trunk'),(incoming.codec,),dtmf_payload=incoming.dtmf_payload),to_tag=call.local_tag)
+            call.invite_response=ok
+            self.send(ok,addr)
+            self.emit('call.ivr.started',call)
+        else:
+            self.plan.incoming(call_id,addr[0],called)
+            self.emit('call.queued',call)
+            ringing=response(msg,180,to_tag=call.local_tag)
+            self.send(ringing,addr)
+            call.invite_response=ringing
+            await self._dispatch()
 
     async def _dispatch(self):
         for intent in self.plan.plan_offers():
@@ -340,14 +368,21 @@ class NativeSwitch:
             call.phone_to=msg.get('to')
             call.phone_contact=contact_uri
             self.acd.answer(call.trunk_call_id,call.agent_id)
-            call.state='answered_wait_ack'
             call.answered_at=time.monotonic()
             self.send(self._phone_request('ACK',call,contact_uri,1),addr)
-            fields=[('Contact',f'<sip:queuepilot@{self.config.advertised_ip}:{self.config.listen_port}>'),('Content-Type','application/sdp')]
-            ok=response(call.request,200,fields,sdp_offer(self.config.advertised_ip,call.media.local_port('trunk'),(answer.codec,)),to_tag=call.local_tag)
-            call.invite_response=ok
-            self.send(ok,call.trunk_addr)
-            self.emit('call.answered',call)
+            if call.trunk_established:
+                # IVR leg was answered earlier; no second SIP 200 response.
+                call.media.connect(answer.codec,re.sub(r'[^a-zA-Z0-9-]','_',call.trunk_call_id)[:64]+'-'+secrets.token_hex(8))
+                call.state='bridged'
+                self.emit('call.answered',call)
+                self.emit('call.bridged',call)
+            else:
+                call.state='answered_wait_ack'
+                fields=[('Contact',f'<sip:queuepilot@{self.config.advertised_ip}:{self.config.listen_port}>'),('Content-Type','application/sdp')]
+                ok=response(call.request,200,fields,sdp_offer(self.config.advertised_ip,call.media.local_port('trunk'),(answer.codec,)),to_tag=call.local_tag)
+                call.invite_response=ok
+                self.send(ok,call.trunk_addr)
+                self.emit('call.answered',call)
         except (SipError,ValueError):
             call.phone_to=msg.get('to')
             self.send(self._phone_request('ACK',call,contact_uri,1),addr)
@@ -375,9 +410,65 @@ class NativeSwitch:
         call.phone_call_id=None;call.phone_addr=None;call.agent_id=None;call.extension=None
         await self._dispatch()
 
+    async def _handle_ivr_digit(self,call_id:str,digit:str)->None:
+        async with self._lock:
+            call=self.calls.get(call_id)
+            if not call or call.state!='ivr' or not call.ivr:
+                return
+            session=call.ivr
+            session.seen_digits.append(digit)
+            queue=session.menu.digits.get(digit)
+            if queue:
+                await self._route_ivr(call,queue)
+            else:
+                await self._retry_ivr(call)
+
+    async def _route_ivr(self,call:LiveCall,queue:str)->None:
+        if not call.ivr or call.state!='ivr':return
+        call.media.stop_ivr()
+        call.queue=queue
+        route=self.routes_by_queue[queue]
+        self.acd.enqueue(call.trunk_call_id,queue,route.skills,route.priority)
+        call.ivr=None
+        call.state='offering'
+        self.emit('call.ivr.selected',call)
+        self.emit('call.queued',call)
+        await self._dispatch()
+
+    async def _retry_ivr(self,call:LiveCall)->None:
+        if not call.ivr or call.state!='ivr':return
+        session=call.ivr
+        session.attempts+=1
+        if session.attempts>=session.menu.max_attempts:
+            if session.menu.fallback_queue:
+                await self._route_ivr(call,session.menu.fallback_queue)
+            else:
+                self.emit('call.ivr.no_selection',call)
+                self._send_trunk_bye(call)
+                await self._finish(call)
+            return
+        session.deadline=time.monotonic()+len(session.menu.pcm)/16000+session.menu.timeout_seconds
+        call.media.play_prompt(session.menu.pcm,call.trunk_media.codec)
+
+    def _send_trunk_bye(self,call:LiveCall)->None:
+        to=call.request.get('to')
+        if ';tag=' not in to.lower():to+=';tag='+call.local_tag
+        fields=[('Via',f'SIP/2.0/UDP {self.config.advertised_ip}:{self.config.listen_port};branch=z9hG4bK{secrets.token_hex(8)}'),
+                ('From',to),('To',call.request.get('from')),('Call-ID',call.trunk_call_id),('CSeq','2 BYE'),('Max-Forwards','70')]
+        uri=header_uri(call.request.get('contact')) if call.request.get('contact') else call.request.uri
+        self.send(packet(f'BYE {uri} SIP/2.0',fields),call.trunk_addr)
+
     def _ack(self,msg:Message,addr:tuple[str,int]):
         call=self.calls.get(msg.get('call-id'))
         if not call or addr!=call.trunk_addr:
+            return
+        if call.state=='ivr_wait_ack' and call.ivr:
+            call.state='ivr'
+            call.trunk_established=True
+            call.media.start_ivr(call.trunk_media.dtmf_payload,
+                 lambda digit,cid=call.trunk_call_id:asyncio.create_task(self._handle_ivr_digit(cid,digit)))
+            call.ivr.deadline=time.monotonic()+len(call.ivr.menu.pcm)/16000+call.ivr.menu.timeout_seconds
+            call.media.play_prompt(call.ivr.menu.pcm,call.trunk_media.codec)
             return
         if call.state=='answered_wait_ack':
             try:
@@ -458,6 +549,10 @@ class NativeSwitch:
                 for invite_id,(_,_,until) in list(self._cancelled.items()):
                     if time.monotonic()>until:self._cancelled.pop(invite_id,None)
                 for call in list(self.calls.values()):
+                    if call.state=='ivr' and call.ivr and time.monotonic()>=call.ivr.deadline:
+                        await self._retry_ivr(call)
+                    if call.state=='ivr_wait_ack' and time.monotonic()-call.created_at>15:
+                        await self._finish(call)
                     if call.state=='answered_wait_ack' and call.answered_at and time.monotonic()-call.answered_at>15:
                         if call.phone_addr and call.phone_contact:
                             self.send(self._phone_request('BYE',call,call.phone_contact),call.phone_addr)
@@ -482,10 +577,16 @@ def config_from_json(path:Path)->Config:
         raise ValueError('Configure unique nonce_secret (32+ characters)')
     directory=Path(obj['record_directory']) if obj.get('record_calls',False) else None
     notice_confirmed=obj.get('recording_notice_confirmed',False) is True
+    menus=tuple(IvrMenu(str(entry['did']),
+                        Path(entry['prompt']) if Path(entry['prompt']).is_absolute() else path.parent/entry['prompt'],
+                        {str(k):str(v) for k,v in entry['digits'].items()},
+                        int(entry.get('timeout_seconds',8)),int(entry.get('max_attempts',2)),
+                        str(entry['fallback_queue']) if entry.get('fallback_queue') else None)
+                for entry in obj.get('ivr_menus',[]))
     return Config(str(obj.get('listen_ip','127.0.0.1')),int(obj.get('listen_port',15060)),str(obj.get('advertised_ip','127.0.0.1')),
                   tuple(obj['avaya_peers']),tuple(obj['phone_networks']),tuple(obj['media_networks']),routes,
                   bindings,{str(k):str(v) for k,v in obj['extension_passwords'].items()},
-                  str(obj.get('sip_realm','queuepilot.local')),secret.encode('utf-8'),int(obj.get('offer_seconds',20)),directory,notice_confirmed)
+                  str(obj.get('sip_realm','queuepilot.local')),secret.encode('utf-8'),int(obj.get('offer_seconds',20)),directory,notice_confirmed,menus)
 
 
 async def _main():

@@ -1,6 +1,6 @@
 # QueuePilot — Independent Contact Center Platform
 
-**الإصدار الحالي: v0.9 (Native SIP + Single Stereo WAV Recording Lab) — مرحلة تطوير واختبار، غير جاهز للإنتاج.**
+**الإصدار الحالي: v1.0 (Native SIP + Single WAV + Local Voice IVR Lab) — مرحلة تطوير واختبار، غير جاهز للإنتاج.**
 
 > **الرؤية الأساسية:** Avaya Aura/Communication Manager تستقبل المكالمات من شبكة الاتصالات وتُسلّمها إلى QueuePilot عبر **SIP Trunk** فقط. بعد التسليم، **QueuePilot هو المسؤول الوحيد عن منطق مركز الاتصال**: استقبال جلسات SIP، الـIVR، اختيار الـQueue، توزيع المكالمات (ACD)، الاتصال بتليفونات الموظفين، مرور الصوت (RTP)، التسجيل، متابعة المشرفين والتقارير.
 >
@@ -13,7 +13,7 @@
 | Avaya Aura — قبل تسليم المكالمة | QueuePilot — بعد التسليم |
 |---|---|
 | استقبال المكالمة من PSTN / خطوط الشركة | استقبال `INVITE` على SIP listener مستقل |
-| اختيار SIP route المخصص لتسليم المكالمة | تحديد القسم من DID ثم IVR/Business Rules (الـIVR الصوتي مخطط له) |
+| اختيار SIP route المخصص لتسليم المكالمة | تحديد القسم من DID ثم IVR صوتي محلي واختيارات DTMF أو تحويل مباشر للطابور |
 | تسليم SIP signaling والصوت وفق إعدادات الـTrunk | إنشاء Queue، تشغيل ACD، اختيار الموظف، إرسال `INVITE` إلى تليفونه |
 | توفير مسار احتياطي عند تعطل QueuePilot حسب تصميم الشبكة | تمرير RTP عبر QueuePilot، تشغيل التسجيل والمراقبة عند اكتمال تطويرهما |
 | **لا تدير موظفي QueuePilot أو مهاراتهم أو التسجيلات أو التقارير** | إدارة بيانات المكالمات والموظفين والصلاحيات والتقارير من داخل المنصة |
@@ -28,7 +28,7 @@ flowchart TD
     Aura -->|SIP INVITE + SDP / RTP handoff| Ingress[QueuePilot Native SIP Ingress]
     subgraph QP[QueuePilot - نظام مستقل]
         Ingress --> Call[Native SIP B2BUA / Call Controller]
-        Call --> IVR[IVR / DTMF / Business Hours - مستهدف]
+        Call --> IVR[IVR صوتي / RFC4733 DTMF (معملي) / Business Hours مستهدف]
         IVR --> Queue[ACD / Skills / Priority / Queues]
         Queue --> Registrar[SIP Registrar / Agent Location]
         Call <--> Media[RTP Media Anchor / Recording / Monitor]
@@ -49,7 +49,7 @@ flowchart TD
 
 1. **وصول المكالمة:** العميل يتصل برقم الشركة؛ Avaya تستقبلها وتوجهها إلى عنوان QueuePilot المسموح به عبر SIP Trunk، مع رقم المتصل والرقم المطلوب (DID) حسب إعدادات التسليم.
 2. **التحقق:** QueuePilot يتحقق من عنوان مصدر الـSIP والرسالة والـSDP وسياسات الدخول. في النسخة المعملية توجد قوائم سماح للمصادر؛ مصادقة الإنتاج عبر النقل الآمن والمواصفات الكاملة ما زالت مطلوبة.
-3. **تحديد الخدمة:** يربط DID بالـQueue (متاح معمليًا). **الهدف القادم** تنفيذ IVR صوتي حقيقي يدعم الرسائل والقوائم وأزرار DTMF ومواعيد العمل والتحويل بين الأقسام.
+3. **تحديد الخدمة:** يربط DID بالـQueue (متاح معمليًا). يمكن اختيار Queue مباشرة من DID أو تشغيل رسالة WAV صوتية (8kHz PCM16) واستقبال DTMF برقم واحد عبر RFC4733 ثم توجيه المكالمة للـQueue المناسبة **معمليًا**؛ مواعيد العمل والقوائم المتعددة والتكامل مع محرر IVR لم تكتمل.
 4. **الدخول للطابور:** ACD يسجّل المكالمة ويبحث عن موظف جاهز تتطابق مهاراته مع متطلبات المكالمة، مع مراعاة الأولوية وأطول مدة توافر؛ وإذا لم يرد الموظف يجرّب غيره حسب السياسة.
 5. **الاتصال بالموظف:** QueuePilot يحدد مكان تليفون SIP المسجل لديه ويُرسل له `INVITE` مباشرة. **التسجيل والاتصال مجرّبان في بيئة SIP محاكاة فقط**.
 6. **الرد ونقل الصوت:** بعد قبول الموظف، يربط QueuePilot طرفَي المكالمة ويمرّر G.711 RTP عبر محرك الصوت الداخلي. **ده مُختبَر معمليًا، وليس على Avaya فعلية**.
@@ -72,16 +72,17 @@ flowchart TD
 
 ## 4. الوظائف: المنفّذ حاليًا مقابل الهدف
 
-| الوظيفة | الحالة في v0.9 | ما ينقص للإنتاج |
+| الوظيفة | الحالة في v1.0 | ما ينقص للإنتاج |
 |---|---|---|
 | SIP REGISTER / مصادقة التليفون | ✅ اختبار محلي: Digest SHA-256 + nonce | توافق التليفونات الفعلية، TLS، تهيئة ومراقبة الأجهزة |
 | استقبال SIP من مصدر مسموح + DID mapping | ✅ اختبار معملي | تكامل Avaya Trunk الحقيقي وتوافق SIP/SDP |
 | ACD Skills / Priority / Longest Idle / retry / ACW | ✅ قواعد واختبارات محلية | حالة دائمة، مزامنة الموظفين ومعالجة إعادة التشغيل |
 | اتصال الموظف SIP ثنائي الطرف (INVITE/ACK/BYE/CANCEL) | ✅ نطاق معملي محدود | معاملات SIP كاملة، timers/retransmissions، transfer/hold/re-INVITE |
-| نقل الصوت G.711 RTP في الاتجاهين | ✅ اختبار محلي | SRTP/RTCP/jitter/DTMF/codec interoperability ومراقبة الجودة |
+| نقل الصوت G.711 RTP في الاتجاهين | ✅ اختبار محلي + صوت رسالة IVR وRFC4733 | SRTP/RTCP/jitter/codec interoperability ومراقبة الجودة |
 | Dashboard / إدارة Queues وAgents | ✅ واجهة وAPI محليًا | صلاحيات مؤسسية، مزامنة حية كاملة، نشر آمن |
 | حفظ أحداث Native SIP في قاعدة البيانات | 🟡 اختياري بـ`--local-events` | Event journal دائم وإعادة إرسال ومطابقة CDR |
-| IVR Flow Editor / إنشاء مسودات | 🟡 موجود | تشغيل prompts وDTMF وBusiness Hours فعليًا داخل محرك الصوت |
+| IVR Flow Editor / إنشاء مسودات | 🟡 موجودة، منفصلة عن التشغيل | ربط المسودات المعتمدة بالمحرك وإدارة الإصدارات |
+| Voice IVR RTP + RFC4733 DTMF + queue choice | ✅ معمل: WAV محلي، رد SIP مبكر، اختيار رقم، إعادة المحاولة/الـFallback | قوائم متداخلة وTTS ومواعيد العمل، Avaya interop وTLS/SRTP |
 | Recording Library: استيراد/بحث/تشغيل | 🟡 استيراد وتسجيل تلقائي معملي اختياري من Native RTP بعد انتهاء المكالمة | استكمال التخزين الآمن والتشفير والاحتفاظ واختبار Avaya |
 | Single Call WAV | ✅ Lab: ملف واحد ستيريو (العميل يسار/الموظف يمين)، وربطه بالمكتبة بعد انتهاء المكالمة | دقة التوقيت/جودة الإنتاج، والموافقة والتوافق مع أجهزة Avaya |
 | Live Listen / Approval / Browser Audio Gateway | 🟡 API وWorkflow فقط | ربط RTP mixer/observer حي وآمن بالمكالمة |
@@ -125,7 +126,8 @@ flowchart TD
 │   ├── audit.py, security.py, config.py, models.py
 │   └── static/                 # Web dashboard (HTML, CSS, JS)
 ├── telephony/
-│   ├── native_switch.py        # Embedded SIP call controller; LAB ONLY
+│   ├── native_switch.py        # Embedded SIP call controller + native IVR; LAB ONLY
+│   ├── ivr.py                  # Local WAV validation and PCM16 -> G.711 encoding
 │   ├── sip_stack.py            # SIP message parsing/auth/SDP primitives
 │   ├── native_sip.py           # Ingress rules, phone directory, call planning
 │   ├── acd.py                  # Skills-based queue scheduling
@@ -205,7 +207,7 @@ python -m compileall -q app telephony tests
 node --check app/static/app.js
 ```
 
-**التحقق الأخير لهذه الوثيقة:** 40 اختبار Python محلي ناجح على v0.9. لا يعني ذلك أن GitHub Actions نجح أو أن Avaya الحقيقية اختُبرت.
+**التحقق الأخير لهذه الوثيقة:** 45 اختبار Python محلي ناجح على v1.0. لا يعني ذلك أن GitHub Actions نجح أو أن Avaya الحقيقية اختُبرت.
 
 ## 8. واجهات الـAPI الرئيسية
 
@@ -271,3 +273,12 @@ node --check app/static/app.js
 - [GitHub development repository](https://github.com/SamoTech/SamoQueue)
 
 **الخلاصة:** QueuePilot ليس إضافة على Avaya، بل نواة مركز اتصال مستقل. **دور Avaya يقتصر على تسليم مكالمات SIP الواردة**؛ لكن **النسخة الحالية v0.9 لا تزال أساسًا معمليًا**. التوثيق يفرق بين ما نجح محليًا وما نعمل للوصول إليه، حتى لا تُعرَّض مكالمات أو بيانات حقيقية للخطر.
+
+
+## 10. Voice IVR الفعلي داخل QueuePilot — v1.0 (معملي)
+
+إذا تم تعريف `ivr_menus` في ملف `telephony/native_switch.local.json`، فإن QueuePilot نفسه يرد على المكالمة الواردة عبر SIP، ويشغّل ملف صوت WAV محليًا على RTP، ويستقبل مفتاح العميل من RFC4733 DTMF ويحدد الـQueue المناسبة، قبل الاتصال بتليفون الموظف. الاختيار متاح من الأرقام `0-9` و`*` و`#`، مع عدد محاولات ومهلة وQueue احتياطي اختياري.
+
+**إعداد سريع:** أضف `ivr_menus` لقائمة ملف الإعداد المحلي كما في [دليل Native IVR](docs/NATIVE_IVR_LAB.md)، وجهّز رسالة WAV mono PCM16 بمعدل 8000 Hz ومدتها لا تتجاوز 30 ثانية. محرك الـIVR لا يعتمد على Avaya IVR أو Asterisk.
+
+**القيود:** محرر IVR في الداشبورد لا ينشر القوائم إلى المحرك بعد؛ التحكم حاليًا يتم من JSON محلي خاص، والرسائل لا تُولَّد بالـTTS. يظل **تسجيل المكالمة ملف WAV واحدًا ستيريو** بعد اتصال الموظف (لا يشمل رسالة الـIVR)، مع شرط تفعيل سياسة التسجيل؛ ولا يُسمح باستخدام الإصدار على مكالمات العملاء حتى اجتياز اختبارات Avaya والأمان والاعتمادية.

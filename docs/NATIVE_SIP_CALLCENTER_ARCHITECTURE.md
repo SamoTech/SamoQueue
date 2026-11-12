@@ -137,3 +137,10 @@ Recording is OFF by default and still requires explicit policy approval.
 
 Recording does NOT provide IVR audio, live listening, whisper, barge,
 recording notices, call transfer, or production SIP/SRTP security.
+
+
+### v1.0 — Native one-level voice IVR lab
+
+An **optional, explicitly configured IVR menu** on one trusted DID answers the SIP trunk leg, plays local PCM WAV prompts as QueuePilot-generated G.711 RTP, and accepts end-flagged RFC4733 DTMF events before dispatching to an approved queue. No external PBX or media middleware.
+
+The recording remains **one stereo WAV per agent-connected call**. The native IVR is local JSON-driven; the dashboard's graphical drafts do not deploy to it. It does not implement TTS, multilevel logic, prompt version distribution, holiday schedules, production transport security or Avaya hardware interop. See [`NATIVE_IVR_LAB.md`](NATIVE_IVR_LAB.md).
