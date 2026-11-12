@@ -1,9 +1,8 @@
-"""Register consent-gated native RTP lab captures in QueuePilot's recording library.
+"""Archive one two-channel WAV per consented native call into QueuePilot's library.
 
-This is an *in-process*, single-machine integration; it does not create, mix or
-transcribe audio. Each direction is labelled independently (trunk/phone); the
-files are NOT a synchronized two-channel recording. It deliberately leaves
-source captures in place, so a DB failure never silently destroys evidence.
+This lab integration never merges mono files after the fact. The native RTP
+engine directly produces one stereo call recording: caller on left, agent on
+right, silence filled on gaps. Source captures survive failed indexing.
 """
 from __future__ import annotations
 
@@ -18,12 +17,12 @@ from app.audit import audit
 from app.config import config
 from app.db import connection
 
-MAX_NATIVE_WAV_BYTES = 32 * 1024 * 1024
-LEGS = frozenset({'trunk', 'phone'})
+MAX_NATIVE_WAV_BYTES = 64 * 1024 * 1024  # 30 min at 8 kHz / 16-bit / stereo
+RECORDING_SOURCE = 'queuepilot-native-conversation'
 
 
 class NativeRecordingArchive:
-    """Single-host lab archive. Call only after the native call is finalized."""
+    """Single-host lab archive; require a completed known call first."""
 
     def __init__(self, capture_directory: Path, *, notice_confirmed: bool):
         if not notice_confirmed:
@@ -40,71 +39,92 @@ class NativeRecordingArchive:
     def store(self, call_id: str, paths: dict[str, Path]) -> list[str]:
         if not paths:
             return []
-        if set(paths) - LEGS:
-            raise ValueError('Unsupported media direction')
+        if set(paths) != {'conversation'}:
+            raise ValueError('Exactly one conversation recording is required per call')
         with connection() as db:
-            call = db.execute("SELECT id FROM calls WHERE source='queuepilot-native' AND external_id=?",(call_id,)).fetchone()
+            call = db.execute("SELECT id FROM calls WHERE source='queuepilot-native' AND external_id=?",
+                              (call_id,)).fetchone()
             if not call:
                 raise ValueError('Native call event must be persisted before recording archival')
             internal_id = call['id']
+        path = Path(paths['conversation'])
+        if path.is_symlink() or not path.resolve().is_relative_to(self.capture_directory):
+            raise ValueError('Invalid capture file location')
+        if not path.exists():
+            with connection() as db:
+                existing = db.execute('''SELECT id FROM recordings WHERE source=? AND external_call_id=?''',
+                                      (RECORDING_SOURCE, call_id)).fetchone()
+            if existing:
+                return [existing['id']]  # Idempotent retry after successful move into the library.
+        if not path.is_file() or path.suffix.lower() != '.wav':
+            raise ValueError('Capture must be a WAV file')
+        size = path.stat().st_size
+        if not 44 <= size <= MAX_NATIVE_WAV_BYTES:
+            raise ValueError('Capture empty or exceeds 64 MiB limit')
+        with wave.open(str(path), 'rb') as source:
+            if (source.getnchannels() != 2 or source.getsampwidth() != 2
+                    or source.getframerate() != 8000 or source.getnframes() < 1
+                    or source.getcomptype() != 'NONE'):
+                raise ValueError('Conversation capture must be stereo PCM16 8 kHz WAV')
+            duration = source.getnframes() / 8000
+        digest = self._sha256(path)
+        with connection() as db:
+            existing = db.execute('''SELECT id,sha256 FROM recordings
+                                     WHERE source=? AND external_call_id=?''',
+                                  (RECORDING_SOURCE, call_id)).fetchone()
+            if existing:
+                if existing['sha256'] == digest:
+                    path.unlink(missing_ok=True)
+                    return [existing['id']]
+                raise ValueError('Call already has a different conversation recording; manual reconciliation required')
         self.library.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
             os.chmod(self.library, 0o700)
         except OSError:
             pass
-        stored=[]
-        for side,path in sorted(paths.items()):
-            path=Path(path)
-            # Do not permit symlinks or arbitrary files outside the lab recording directory.
-            if path.is_symlink() or not path.resolve().is_relative_to(self.capture_directory):
-                raise ValueError('Invalid capture file location')
-            if not path.is_file() or path.suffix.lower()!='.wav':
-                raise ValueError('Capture must be a WAV file')
-            n=path.stat().st_size
-            if not 44 <= n <= MAX_NATIVE_WAV_BYTES:
-                raise ValueError('Capture empty or exceeds 32 MiB limit')
-            with wave.open(str(path),'rb') as reader:
-                if reader.getnchannels()!=1 or reader.getsampwidth()!=2 or reader.getframerate()!=8000 or reader.getnframes()<1:
-                    raise ValueError('Capture must contain mono PCM16 8 kHz samples')
-                duration=reader.getnframes()/8000
-            digest=hashlib.sha256()
-            # The media leg is deliberately part of the identity: two identical
-            # silence tracks are still distinct directions of the same call.
-            source='queuepilot-native-'+side
+        rec_id = 'rec_' + secrets.token_hex(16)
+        target = self.library / (rec_id + '.wav')
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            copied = hashlib.sha256()
+            with os.fdopen(fd, 'wb') as dest, path.open('rb') as origin:
+                while chunk := origin.read(64 * 1024):
+                    dest.write(chunk)
+                    copied.update(chunk)
+                dest.flush()
+                os.fsync(dest.fileno())
+            if copied.hexdigest() != digest or target.stat().st_size != size:
+                raise ValueError('Recording changed during archival; cannot index a mismatched file')
             with connection() as db:
-                duplicate=db.execute('''SELECT id FROM recordings WHERE source=? AND external_call_id=? AND sha256=?''',
-                                     (source,call_id,self._sha256(path))).fetchone()
-                if duplicate:
-                    stored.append(duplicate['id'])
-                    continue
-            rec_id='rec_'+secrets.token_hex(16)
-            target=self.library/(rec_id+'.wav')
-            # Create destination exclusively to avoid replacing someone else's media.
+                # Fail closed even if a duplicate was created while copying.
+                existing = db.execute('''SELECT id FROM recordings
+                                         WHERE source=? AND external_call_id=?''',
+                                      (RECORDING_SOURCE, call_id)).fetchone()
+                if existing:
+                    raise ValueError('Recording already archived for this native call')
+                db.execute('''INSERT INTO recordings(id,source,external_call_id,call_id,original_name,mime_type,
+                            file_path,bytes,sha256,recorded_at,duration_seconds,consent_attested,created_at)
+                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                           (rec_id, RECORDING_SOURCE, call_id, internal_id, rec_id + '.wav', 'audio/wav',
+                            str(target), size, digest, time.time() - duration, duration, 1, time.time()))
+                audit(db, 'queuepilot-native-engine', 'recording.archived', rec_id,
+                      'One stereo WAV: caller/trunk=left; agent/phone=right; approximate RTP-timeline alignment')
+            # Only after the library copy + DB transaction have committed: keep
+            # ONE physical WAV, not a source copy and a second archived copy.
+            # If unlink fails, the recording is still playable; cleanup is pending.
             try:
-                fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-                with os.fdopen(fd,'wb') as dest, path.open('rb') as origin:
-                    while chunk:=origin.read(64*1024):
-                        dest.write(chunk)
-                        digest.update(chunk)
-                    dest.flush(); os.fsync(dest.fileno())
-                with connection() as db:
-                    db.execute('''INSERT INTO recordings(id,source,external_call_id,call_id,original_name,mime_type,
-                                file_path,bytes,sha256,recorded_at,duration_seconds,consent_attested,created_at)
-                                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                               (rec_id,source,call_id,internal_id,rec_id+'.wav','audio/wav',
-                                str(target),n,digest.hexdigest(),time.time()-duration,duration,1,time.time()))
-                    audit(db,'queuepilot-native-engine','recording.archived',rec_id,
-                          'Direction '+side+'; unsynchronized lab leg, consent policy acknowledged')
-                stored.append(rec_id)
-            except Exception:
-                target.unlink(missing_ok=True)
-                raise
-        return stored
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return [rec_id]
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
 
     @staticmethod
-    def _sha256(path: Path)->str:
-        digest=hashlib.sha256()
-        with path.open('rb') as f:
-            while chunk:=f.read(64*1024):
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open('rb') as handle:
+            while chunk := handle.read(64 * 1024):
                 digest.update(chunk)
         return digest.hexdigest()

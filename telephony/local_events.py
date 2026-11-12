@@ -54,7 +54,7 @@ class LocalEventWriter:
         ingest(payload)
 
     def archive_media(self, call, paths: dict[str, Path]) -> list[str]:
-        """Archive finalized PCM WAV legs; call.completed event must already exist."""
+        """Archive one finalized stereo WAV; call.completed event must exist."""
         if not paths or self.recording_capture_dir is None:
             return []
         return NativeRecordingArchive(self.recording_capture_dir,

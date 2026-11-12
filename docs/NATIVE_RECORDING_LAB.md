@@ -1,83 +1,70 @@
-# QueuePilot v0.8 — Native RTP recording archive (LAB only)
+# QueuePilot v0.9 — ONE WAV recording per call (LAB only)
 
-## Scope and limits
+## What is actually implemented
 
-Avaya delivers calls over an authorized SIP trunk, but the **QueuePilot-owned** SIP
-runtime is the media anchor and captures G.711 RTP locally. The implementation
-can archive two **separate unsynchronized mono WAV tracks** (customer/trunk and
-agent/phone) into the QueuePilot management library after a call finishes.
-This is not a mixed conversation recording, real-time monitoring, or a compliant
-production recorder. No Asterisk, FreeSWITCH, AES, or DMCC is used.
+The QueuePilot-owned RTP relay captures both legs into **ONE stereo WAV**
+(PCM16, 8000 Hz). Channel 0/left is the caller (inbound SIP trunk), and
+channel 1/right is the agent (registered IP phone). A shared monotonic
+arrival-time origin plus per-leg RTP timestamps approximate their alignment.
+Silence is inserted for RTP gaps; a bounded 500 ms late-packet window
+permits modest packet reordering. There is no outside recorder, Asterisk,
+FreeSWITCH, AES, or DMCC.
 
-## Security gates: default OFF
-
-1. On the management process, set `RECORDINGS_ENABLED=true` and configure a
-   protected `RECORDING_DIR` in local `.env` only.
-2. On the native SIP process, set `record_calls=true`,
-   `recording_notice_confirmed=true`, and a local `record_directory` in
-   `telephony/native_switch.local.json`. The capture and library directories
-   **must differ**. The flag is an *operator acknowledgment* that a lawful,
-   appropriately notified and authorized recording policy exists; QueuePilot
-   does not itself play consent notices or determine legal permission.
-3. Use `--lab --local-events`, the **same** `APP_DB_PATH`, and matching QueuePilot
-   queue and agent IDs on both processes. Without local event integration,
-   diagnostics remain only local WAV files (not indexed to the library).
-4. Configure strict local filesystem access: the archived files are mode 0600
-   and the destination folder mode 0700. Do not expose raw media folders over
-   a web/static server. Browser playback requires an authenticated supervisor.
-
-The runtime refuses to start with requested recording but without explicit
-policy acknowledgement, and refuses to enable recording-library integration if
-the management `RECORDINGS_ENABLED` flag is disabled.
-
-## Native process lifecycle
-
-```
-Avaya test SIP INVITE -> NativeSwitch -> agent INVITE / 200 / ACK
-                                   -> QueuePilot RTP relay G.711
-                                   -> per-direction WAV capture (OFF by default)
-BYE -> close WAV -> write call.completed -> archive each leg -> recordings table
-                                                             -> /api/cc/recordings
-                                                             -> CSV/JSON report
-                                                             -> authenticated audio
+```text
+Avaya test SIP -> QueuePilot NativeSwitch -> registered SIP phone
+                 QueuePilot RTP anchor
+                 ├─ caller frames -> LEFT channel
+                 └─ agent frames  -> RIGHT channel
+                   one call-id-conversation.wav
+BYE -> close final WAV -> call.completed -> archive one row per call
+      -> protected recording library -> authenticated playback / reports
 ```
 
-- `telephony/rtp_media.py`: manages RTP and local mono PCM16 8 kHz WAV legs.
-- `telephony/native_switch.py`: owns the call and invokes the archive after
-  closing media and publishing a terminal call event.
-- `telephony/local_events.py`: optional, strictly local event and archive hook.
-- `telephony/recording_archive.py`: validates each capture location and WAV
-  properties, copies to a uniquely named protected file, hashes its bytes,
-  deduplicates by `(source, call ID, hash)`, and audits the index action.
-- The two media directions have distinct sources so even equal-content silence
-  tracks do not unintentionally deduplicate each other.
-- Original local capture files are retained to avoid data loss if indexing
-  fails. Storage lifecycle, encryption and automated retention are pending.
+The recorder enforces a 30-minute lab maximum, rejects unsupported codecs,
+keeps in-memory packet reordering bounded, and never indexes incomplete
+captures. On a successful archived DB transaction the temporary capture is
+removed, leaving only one WAV in the library. On failure the source is
+retained to permit manual recovery. Old v0.8 two-leg recordings are NOT
+automatically deleted; those are historical data subject to retention rules.
 
-## Operational limitations
+## Explicit opt-in; OFF by default
 
-- **Lab only:** UDP/IPv4/G.711 subset without SIP transaction completeness,
-  SRTP/TLS, secure RTP identity, HA, durable event journal, RTCP and jitter
-  correction. Avaya phone interoperability has not been demonstrated.
-- Each track has its own packet timeline; the recorder **does not** guarantee
-  stereo, synchronization, silence-filling, transcript or complete audio when
-  packets are lost. A one-way or no-media call may have one or zero recordings.
-- Capture is limited to 30 minutes per leg; truncated tracks are not
-  indexed in the recording library. Archive accepts at most 32 MiB per WAV file. This is **not** an approved retention, compliance or lossless design.
-- A local DB or filesystem failure is logged but cannot be retried durably yet;
-  inspect `native_recording_archive_failed` and source captures after a failure.
-- Consent, employee monitoring policies, RBAC/SSO, tenant isolation, encryption,
-  retention/deletion and tamper-evident audit must be completed before deployment.
+1. Set `RECORDINGS_ENABLED=true` and a private `RECORDING_DIR` in `.env` for
+   the management service. No real passwords in Git.
+2. Set `record_calls=true`, `recording_notice_confirmed=true`, and a private
+   `record_directory` in `telephony/native_switch.local.json`.
+   The capture and archive directories must differ.
+3. Run the lab native engine with `--lab --local-events` and matching queue
+   and agent database IDs. Both processes must use the same `APP_DB_PATH`.
+4. Recording files are mode 0600; library directory 0700, never static served.
+   Browsing/playback requires supervisor login and is audit logged.
+
+The operator policy flag is NOT evidence that callers received notice or
+consented. A real consent announcement/approval workflow is NOT implemented.
+
+## Limits / security
+
+- **Lab-only UDP/IPv4 G.711**; no TLS, SRTP, RTCP or accurate long-duration
+  clock drift correction; no tested Avaya hardware interoperability.
+- Timeline approximation uses arrival of the first RTP packet per direction
+  plus RTP timestamps. It is not sample-accurate across distinct clocks.
+- Audio is ONE stereo file, not a mono mix; normal stereo playback hears both.
+- No live listen, whisper, barge, production IVR/DTMF or retention automation.
+- Files are not yet encrypted at rest by QueuePilot and there is no HA.
+- Max 30 minutes; max archive size 64 MiB. General upload API has a separate
+  32 MiB limit and is not the native WAV archive pipeline.
+- If the DB/indexing fails, a source file can remain. Alerting/recovery
+  and compliance workflows are still needed before any real deployment.
 
 ## Verification
 
-```
+```bash
 python -m pytest -q
 python -m compileall -q app telephony tests
 node --check app/static/app.js
 ```
 
-Tests include a simulated SIP trunk and registered test phone, two-way RTP,
-call termination, source-to-library archival, distinct media-leg identity,
-authenticated browser playback, deduplication, disabled/absent-consent checks,
-and invalid audio/path refusal. **These are local tests only.**
+Tests cover SIP REGISTER/INVITE/RTP/BYE to one WAV, left/right channel
+content, RTP gaps/late arrivals, timestamp wrap, truncation, one indexed
+row, access controls, duplicate rejection, authenticated playback and
+post-commit removal of the temporary source file.

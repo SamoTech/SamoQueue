@@ -125,11 +125,20 @@ async def exercise(tmp_path,event_writer=None):
         assert server.acd.calls['customer-1'].state=='completed'
         assert 'customer-1' not in server.calls
         assert [e['event'] for e in server.events]==['call.queued','call.offered','call.answered','call.bridged','call.completed']
-        with wave.open(str(next(tmp_path.glob('customer-1-*-trunk.wav'))),'rb') as w:
-            assert w.getframerate()==8000
-            assert w.getnframes()==160
-        with wave.open(str(next(tmp_path.glob('customer-1-*-phone.wav'))),'rb') as w:
-            assert w.getnframes()==160
+        paths=list(tmp_path.glob('customer-1-*-conversation.wav'))
+        if event_writer is None:
+            assert len(paths)==1, 'Each call must create exactly one audio file'
+            assert not list(tmp_path.glob('customer-1-*-trunk.wav'))
+            assert not list(tmp_path.glob('customer-1-*-phone.wav'))
+            with wave.open(str(paths[0]),'rb') as w:
+                assert w.getnchannels()==2
+                assert w.getsampwidth()==2
+                assert w.getframerate()==8000
+                assert w.getnframes()>=160
+                assert len(w.readframes(w.getnframes()))==w.getnframes()*4
+        else:
+            # After durable archival, only the protected library copy remains.
+            assert paths==[]
     finally:
         await server.stop()
         for sock in (phone,trunk,phone_media,trunk_media):sock.close()

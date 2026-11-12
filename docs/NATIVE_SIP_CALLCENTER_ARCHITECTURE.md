@@ -119,3 +119,21 @@ playback, deduplication and an audit record. This operates only with explicit
 tracks are NOT synchronized or mixed, and this is not a production recording
 solution, consent enforcement system or live monitoring/IVR bridge. See
 [`NATIVE_RECORDING_LAB.md`](NATIVE_RECORDING_LAB.md).
+
+
+### v0.9 — One recording file per call (lab only)
+
+`StereoCallRecorder` inside `telephony/stereo_recording.py` records both RTP
+legs to a **single two-channel PCM16 8 kHz WAV**: caller/trunk is LEFT,
+agent/phone is RIGHT. Each stream's RTP timestamp spacing is retained,
+while initial arrival on a monotonic clock gives an approximate shared
+timeline. Missing packets/speech are silent, with a 500ms reordering window.
+This cannot replace full RTP/RTCP clock drift correction or secure SRTP.
+After verified commit to the authenticated recording library, the transient
+source WAV is removed; retry is idempotent and a partial unique DB index
+prevents two native-conversation records per call. Previous v0.8 mono archive
+rows are preserved as historical records, without destructive migration.
+Recording is OFF by default and still requires explicit policy approval.
+
+Recording does NOT provide IVR audio, live listening, whisper, barge,
+recording notices, call transfer, or production SIP/SRTP security.

@@ -66,6 +66,11 @@ def init_db():
             UNIQUE(source, external_call_id, sha256)
         );
         CREATE INDEX IF NOT EXISTS idx_recordings_call ON recordings(call_id,recorded_at);
+        -- New native engine stores precisely one conversation WAV per call.
+        -- Legacy per-leg v0.8 recordings remain untouched for history.
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_native_conversation_per_call
+            ON recordings(source,external_call_id)
+            WHERE source='queuepilot-native-conversation';
         CREATE TABLE IF NOT EXISTS monitor_sessions (
             id TEXT PRIMARY KEY, call_id TEXT NOT NULL REFERENCES calls(id),
             target_station TEXT NOT NULL, created_by TEXT NOT NULL,

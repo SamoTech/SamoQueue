@@ -22,10 +22,10 @@ from telephony.native_switch import Config
 
 def _make_wav(path: Path):
     with wave.open(str(path),'wb') as writer:
-        writer.setnchannels(1)
+        writer.setnchannels(2)
         writer.setsampwidth(2)
         writer.setframerate(8000)
-        writer.writeframes(bytes(320))
+        writer.writeframes(bytes(640))
 
 
 def _setup(tmp_path):
@@ -45,33 +45,38 @@ def _setup(tmp_path):
     return writer,qid,aid,captures
 
 
-def test_native_recordings_two_legs_dedup_and_browser_playback(tmp_path):
+def test_one_stereo_recording_dedup_and_browser_playback(tmp_path):
     writer,queue,agent,captures=_setup(tmp_path)
     call=SimpleNamespace(trunk_call_id='lab-recorded-001',queue=queue,agent_id=agent)
     writer('call.queued',call)
     writer('call.answered',call)
     writer('call.completed',call)
-    a=captures/'call-trunk.wav'
-    b=captures/'call-phone.wav'
-    _make_wav(a);_make_wav(b)
-    ids=writer.archive_media(call,{'trunk':a,'phone':b})
-    assert len(ids)==2 and len(set(ids))==2
-    assert writer.archive_media(call,{'trunk':a,'phone':b})==ids
+    audio=captures/'conversation.wav'
+    _make_wav(audio)
+    original=audio.read_bytes()
+    ids=writer.archive_media(call,{'conversation':audio})
+    assert len(ids)==1
+    assert not audio.exists(), 'Successful archive must leave only the library WAV'
+    assert writer.archive_media(call,{'conversation':audio})==ids
     with connection() as db:
-        recordings=[dict(r) for r in db.execute('SELECT * FROM recordings ORDER BY source')]
-        assert [r['source'] for r in recordings]==['queuepilot-native-phone','queuepilot-native-trunk']
-        assert {r['external_call_id'] for r in recordings}=={'lab-recorded-001'}
-        assert all(r['consent_attested'] for r in recordings)
-        assert db.execute('SELECT COUNT(*) FROM audit_log WHERE operation=?',('recording.archived',)).fetchone()[0]==2
-    # Recording is not publicly available. A supervisor must authenticate.
+        recordings=[dict(r) for r in db.execute('SELECT * FROM recordings')]
+        assert len(recordings)==1
+        assert recordings[0]['source']=='queuepilot-native-conversation'
+        assert recordings[0]['external_call_id']=='lab-recorded-001'
+        assert recordings[0]['consent_attested']
+        assert len(list(config.recording_dir.glob('*.wav')))==1
+        assert db.execute('SELECT COUNT(*) FROM audit_log WHERE operation=?',('recording.archived',)).fetchone()[0]==1
     with TestClient(app) as client:
         assert client.get('/api/cc/recordings').status_code==401
         login=client.post('/api/login',json={'username':'admin','password':config.admin_password})
         assert login.status_code==200
         h={'Authorization':'Bearer '+login.json()['token']}
         listing=client.get('/api/cc/recordings',headers=h)
-        assert listing.status_code==200 and len(listing.json()['recordings'])==2
-        assert client.get('/api/cc/recordings/'+ids[0]+'/audio',headers=h).content==a.read_bytes()
+        assert listing.status_code==200 and len(listing.json()['recordings'])==1
+        recorded=client.get('/api/cc/recordings/'+ids[0]+'/audio',headers=h)
+        assert recorded.status_code==200 and recorded.content==original
+        with wave.open(str(Path(recordings[0]['file_path'])),'rb') as w:
+            assert w.getnchannels()==2 and w.getframerate()==8000
     config.recordings_enabled=False
 
 
@@ -95,13 +100,13 @@ def test_archive_rejects_unknown_call_and_outside_files(tmp_path):
     _make_wav(track)
     unknown=SimpleNamespace(trunk_call_id='nonexistent',queue=q,agent_id=a)
     with pytest.raises(ValueError,match='must be persisted'):
-        writer.archive_media(unknown,{'trunk':track})
+        writer.archive_media(unknown,{'conversation':track})
     call=SimpleNamespace(trunk_call_id='call-ok',queue=q,agent_id=a)
     writer('call.queued',call)
     outside=tmp_path/'outside.wav'
     _make_wav(outside)
     with pytest.raises(ValueError,match='location'):
-        writer.archive_media(call,{'trunk':outside})
+        writer.archive_media(call,{'conversation':outside})
     config.recordings_enabled=False
 
 
@@ -112,8 +117,8 @@ def test_archive_does_not_accept_non_wav_or_unknown_direction(tmp_path):
     bad=captures/'untrusted.wav'
     bad.write_bytes(b'untrusted bytes')
     with pytest.raises((ValueError,EOFError,wave.Error)):
-        writer.archive_media(call,{'trunk':bad})
-    with pytest.raises(ValueError,match='direction'):
+        writer.archive_media(call,{'conversation':bad})
+    with pytest.raises(ValueError,match='Exactly one conversation'):
         writer.archive_media(call,{'other':bad})
     config.recordings_enabled=False
 
@@ -136,7 +141,11 @@ def test_actual_native_sip_lab_rtp_flows_into_recording_library(tmp_path):
         assert call['agent_id']=='agent1'
         rows=[dict(row) for row in db.execute(
             "SELECT source,external_call_id,file_path FROM recordings WHERE external_call_id='customer-1' ORDER BY source")]
-        assert len(rows)==2
-        assert [r['source'] for r in rows]==['queuepilot-native-phone','queuepilot-native-trunk']
+        assert len(rows)==1
+        assert [r['source'] for r in rows]==['queuepilot-native-conversation']
         assert all(Path(r['file_path']).exists() for r in rows)
+        assert not list(tmp_path.glob('customer-1-*-conversation.wav'))
+        with wave.open(rows[0]['file_path'],'rb') as recorded:
+            assert recorded.getnchannels()==2
+            assert recorded.getnframes()>=160
     config.recordings_enabled=False

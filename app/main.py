@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     init_db()
     yield
 
-app = FastAPI(title='QueuePilot Independent Contact Center', version='0.8.0-lab', lifespan=lifespan,
+app = FastAPI(title='QueuePilot Independent Contact Center', version='0.9.0-lab', lifespan=lifespan,
               description='Independent QueuePilot SIP/ACD laboratory architecture; no AES/WTI management APIs. Not production-ready.')
 app.include_router(contact_center_router)
 static_root = Path(__file__).parent / 'static'
@@ -36,7 +36,7 @@ def index():
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.8.0-lab'}
+    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.9.0-lab'}
 
 # Single administrator for development/MVP. Use enterprise SSO and proper RBAC in production.
 login_attempts = {}

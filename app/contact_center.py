@@ -1,7 +1,7 @@
 """Call-center operations domain: recorder ingest, audited playback, monitor gateway,
 IVR drafts, and independently exportable event-derived reports.
 
-The native SIP/RTP runtime can archive two separate *lab-only* WAV legs after
+The native SIP/RTP runtime can archive ONE *lab-only* stereo WAV after
 call completion when explicitly enabled and notice policy is acknowledged.
 IVR execution and supervisor mixing are NOT connected to live media yet.
 These APIs are not proof of production recording, listening, or IVR playback.
@@ -162,7 +162,7 @@ def recordings(limit: int = Query(default=100, ge=1, le=1000),
     with connection() as db:
         rows = [dict(r) for r in db.execute(sql, values)]
     return {'recordings': rows, 'recording_enabled': config.recordings_enabled,
-            'note': 'Native SIP lab may archive two separate unsynchronized WAV legs when recording, notice policy and local events are explicitly enabled. No mixed/stereo recording or production consent enforcement.'}
+            'note': 'Native SIP lab can archive one approximately time-aligned stereo WAV per call (caller left, agent right), when explicitly enabled. Not production-grade recording or consent enforcement.'}
 
 
 @router.get('/recordings/{recording_id}/audio')
