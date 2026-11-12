@@ -594,8 +594,12 @@ async def _main():
     parser.add_argument('--config',required=True,help='Local JSON configuration (never commit real credentials)')
     parser.add_argument('--lab',action='store_true',help='Explicitly acknowledge nonproduction lab limitations')
     parser.add_argument('--local-events',action='store_true',help='Opt in to writing native call events directly into the local QueuePilot dashboard DB')
+    parser.add_argument('--local-monitor',action='store_true',help='Opt in to authorized RTP listen streaming to the local QueuePilot dashboard (LAB ONLY)')
+    parser.add_argument('--monitor-origin',default='http://127.0.0.1:8000',help='Loopback management API origin; never external')
     args=parser.parse_args()
     if not args.lab:parser.error('Native SIP runtime is LAB-ONLY; pass --lab')
+    if args.local_monitor and not args.local_events:
+        parser.error('--local-monitor requires --local-events for call correlation')
     config=config_from_json(Path(args.config))
     writer=None
     if args.local_events:
@@ -604,8 +608,16 @@ async def _main():
                                 recording_capture_dir=config.record_directory,
                                 recording_notice_confirmed=config.recording_notice_confirmed)
     server=NativeSwitch(config,event_writer=writer)
+    monitor=None
+    if args.local_monitor:
+        from app.config import config as app_config
+        from .live_monitor import NativeMonitorWorker
+        if not app_config.monitoring_enabled:
+            raise RuntimeError('MONITORING_ENABLED=true is required for the explicit --local-monitor lab mode')
+        monitor=NativeMonitorWorker(server,args.monitor_origin,app_config.monitor_engine_key)
     await server.start()
     if writer: writer.heartbeat(True)
+    if monitor: await monitor.start()
     print(f'QueuePilot LAB SIP gateway listening on {config.listen_ip}:{config.listen_port}; no production support')
     async def health_loop():
         while True:
@@ -616,6 +628,7 @@ async def _main():
     health_task=asyncio.create_task(health_loop()) if writer else None
     try: await asyncio.Event().wait()
     finally:
+        if monitor: await monitor.stop()
         if health_task:
             health_task.cancel()
             try: await health_task

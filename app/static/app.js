@@ -171,7 +171,7 @@ async function loadMonitoring(){
     document.querySelectorAll('[data-monapprove]').forEach(b=>b.onclick=async()=>{
       if(window.prompt('Separate approval required. Type APPROVE LIVE LISTEN')!=='APPROVE LIVE LISTEN')return;
       try{await api('/cc/monitor/sessions/'+encodeURIComponent(b.dataset.monapprove)+'/approve',
-       {method:'POST',body:JSON.stringify({confirmation:'APPROVE LIVE LISTEN'})});flash('Approved; awaiting native observer implementation');loadMonitoring();}
+       {method:'POST',body:JSON.stringify({confirmation:'APPROVE LIVE LISTEN'})});flash('Approved; waiting for the opt-in native RTP observer to attach');loadMonitoring();}
       catch(e){flash(e.message);}
     });
     document.querySelectorAll('[data-monstop]').forEach(b=>b.onclick=async()=>{
@@ -200,7 +200,7 @@ async function connectMonitorAudio(sid){
     const scheme=location.protocol==='https:'?'wss:':'ws:';
     const ws=new WebSocket(scheme+'//'+location.host+'/api/cc/monitor/sessions/'+encodeURIComponent(sid)+'/audio/ws?ticket='+encodeURIComponent(result.ticket));
     monitoringSocket=ws;ws.binaryType='arraybuffer';
-    $('livePlayerWrap').hidden=false;$('liveAudioState').textContent='Connecting to approved media gateway…';
+    $('livePlayerWrap').hidden=false;$('liveAudioState').textContent='Connecting to QueuePilot native RTP observer…';
     ws.onopen=()=>$('liveAudioState').textContent='Stream connected · 16kHz PCM';
     ws.onclose=()=>$('liveAudioState').textContent='Disconnected (or no active session)';
     ws.onerror=()=>$('liveAudioState').textContent='Media gateway error';

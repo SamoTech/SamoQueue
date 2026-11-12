@@ -221,7 +221,7 @@ def list_monitors(user=Depends(require_supervisor)):
                    JOIN calls c ON c.id=s.call_id JOIN queues q ON q.id=c.queue_id
                    LEFT JOIN agents a ON a.id=c.agent_id ORDER BY s.created_at DESC LIMIT 100''')]
     return {'sessions': rows, 'enabled': config.monitoring_enabled,
-            'transport': 'PCM16/16000/mono internal WebSocket relay (requires native RTP observation mixer)'}
+            'transport': 'PCM16/16000/mono internal WebSocket relay (opt-in native RTP lab observer)'}
 
 
 @router.post('/monitor/sessions/{sid}/approve')
@@ -306,6 +306,7 @@ def monitor_engine_result(sid: str, body: MonitorResult, _=Depends(check_monitor
         if not row:
             raise HTTPException(404, 'Monitoring session not found')
         allowed = ((row['state'] == 'leased' and body.result in ('active','failed','uncertain'))
+                   or (row['state'] == 'active' and body.result in ('ended','failed','uncertain'))
                    or (row['state'] in ('stop_leased','stop_requested') and body.result in ('ended','failed','uncertain')))
         if not allowed:
             raise HTTPException(409, 'Invalid transition for the currently leased monitor operation')
@@ -329,6 +330,8 @@ _tickets: dict[str, tuple[str, float]] = {}
 
 @router.post('/monitor/sessions/{sid}/audio-ticket')
 def audio_ticket(sid: str, user=Depends(require_reviewer)):
+    if not config.monitoring_enabled:
+        raise HTTPException(403, 'Monitoring disabled')
     with connection() as db:
         s = db.execute('''SELECT s.state,s.created_by,s.active_at,c.status AS call_status FROM monitor_sessions s
                           JOIN calls c ON c.id=s.call_id WHERE s.id=?''', (sid,)).fetchone()
@@ -348,6 +351,9 @@ def audio_ticket(sid: str, user=Depends(require_reviewer)):
 
 @router.websocket('/monitor/sessions/{sid}/audio/ws')
 async def monitor_audio_socket(ws: WebSocket, sid: str):
+    if not config.monitoring_enabled:
+        await ws.close(code=1008)
+        return
     ticket = ws.query_params.get('ticket', '')
     stored = _tickets.pop(hashlib.sha256(ticket.encode()).hexdigest(), None) if ticket else None
     if not stored or stored[0] != sid or time.time() > stored[1]:
@@ -365,7 +371,13 @@ async def monitor_audio_socket(ws: WebSocket, sid: str):
     try:
         while True:
             try:
-                frame = await asyncio.wait_for(q.get(), timeout=5)
+                frame = await asyncio.wait_for(q.get(), timeout=0.5)
+                with connection() as db:
+                    row = db.execute('''SELECT s.state,s.active_at,c.status AS call_status FROM monitor_sessions s
+                              JOIN calls c ON c.id=s.call_id WHERE s.id=?''', (sid,)).fetchone()
+                if not row or row['state'] != 'active' or row['call_status'] != 'answered' or not config.monitoring_enabled:
+                    await ws.close(code=1000)
+                    break
                 await ws.send_bytes(frame)
             except asyncio.TimeoutError:
                 with connection() as db:

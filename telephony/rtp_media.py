@@ -53,6 +53,7 @@ class RtpRelay:
         self.enabled=False
         self.codec:int|None=None
         self._recorder:StereoCallRecorder|None=None
+        self.on_audio:Callable[[str,bytes,int],None]|None=None  # approved supervisor RTP tap, lab only
         self.packet_counts={'trunk':0,'phone':0}
         self.recorded_paths:dict[str,Path]={}
         self.recording_truncated:set[str]=set()
@@ -185,6 +186,11 @@ class RtpRelay:
         if not target:return
         target.transport.sendto(packet,(target.remote.host,target.remote.port))
         self.packet_counts[side]+=1
+        if self.on_audio is not None:
+            try:
+                self.on_audio(side, payload, self.codec)
+            except Exception:
+                self.on_audio = None  # fail closed without interrupting the live call
         if self._recorder is not None:
             timestamp=int.from_bytes(packet[4:8], 'big')
             self._recorder.add(side,timestamp,payload,self.codec)
@@ -192,6 +198,7 @@ class RtpRelay:
                 self.recording_truncated.add('conversation')
 
     def close(self):
+        self.on_audio = None
         self.stop_ivr()
         self.enabled=False
         if self._recorder is not None:

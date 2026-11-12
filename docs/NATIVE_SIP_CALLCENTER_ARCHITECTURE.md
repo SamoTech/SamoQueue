@@ -144,3 +144,14 @@ recording notices, call transfer, or production SIP/SRTP security.
 An **optional, explicitly configured IVR menu** on one trusted DID answers the SIP trunk leg, plays local PCM WAV prompts as QueuePilot-generated G.711 RTP, and accepts end-flagged RFC4733 DTMF events before dispatching to an approved queue. No external PBX or media middleware.
 
 The recording remains **one stereo WAV per agent-connected call**. The native IVR is local JSON-driven; the dashboard's graphical drafts do not deploy to it. It does not implement TTS, multilevel logic, prompt version distribution, holiday schedules, production transport security or Avaya hardware interop. See [`NATIVE_IVR_LAB.md`](NATIVE_IVR_LAB.md).
+
+
+### v1.1 native listen-only observation lab
+
+`telephony/live_monitor.py` now attaches a read-only G.711 PCM audio tap to an
+**approved, established QueuePilot native call** and streams an 8kHz-to-16kHz
+mono mix to the management service's authenticated browser relay. Independent
+reviewer approval and explicit opt-in are required; no additional PBX is used.
+One stereo WAV recording per call remains unchanged. This is a local lab stream,
+not production supervisor monitoring; Whisper/Barge remain unimplemented. See
+[`NATIVE_LIVE_LISTEN_LAB.md`](NATIVE_LIVE_LISTEN_LAB.md).
