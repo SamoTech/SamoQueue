@@ -6,7 +6,7 @@ external PBX. Unsupported requests fail closed; never deploy on production
 Avaya trunks, record customer audio, or advertise as a full RFC 3261 B2BUA.
 
 Known gaps: retransmissions/transaction timers, TLS/SRTP, Avaya SIP extensions,
-provisioning, transfer/hold/reINVITE, IVR, transcoding, multi-node, RTP security,
+provisioning, transfer/hold/reINVITE, production IVR deployment, transcoding, multi-node, RTP security,
 conference monitoring, high availability and durable real-time reports.
 """
 from __future__ import annotations
@@ -119,6 +119,9 @@ class NativeSwitch:
         self.config=config
         self.event_writer=event_writer
         self.event_feed_healthy=True
+        self.control_sync_healthy=True
+        self.enabled_queues={route.queue for route in config.did_routes}
+        self.queue_skill_overrides:dict[str,frozenset[str]]={}
         self.acd=ACD(offer_seconds=config.offer_seconds)
         self.directory=PhoneDirectory(config.phone_networks)
         self.plan=IndependentCallPlan(SipIngressPlan(config.avaya_peers,config.did_routes),self.directory,self.acd)
@@ -139,6 +142,10 @@ class NativeSwitch:
         self._cancelled:dict[str,tuple[tuple[str,int],Message,float]]={}
 
     async def start(self):
+        # Synchronize the enabled/disabled queue policy before accepting an INVITE.
+        sync=getattr(self.event_writer,'sync_controls',None)
+        if callable(sync):
+            sync(self)
         loop=asyncio.get_running_loop()
         transport,_=await loop.create_datagram_endpoint(lambda:_Udp(self),local_addr=(self.config.listen_ip,self.config.listen_port))
         self.transport=transport
@@ -262,6 +269,8 @@ class NativeSwitch:
             called=uri_user(msg.uri)
             route=self.plan.ingress.admit(addr[0],called)
             incoming=parse_sdp(msg.body,self.config.media_networks)
+            if route.queue not in self.enabled_queues:
+                self.send(response(msg,503),addr);return
             menu=self.ivr_menus.get(called)
             if menu and incoming.dtmf_payload is None:
                 raise SipError('IVR requires negotiated RFC4733 telephone-event')
@@ -290,7 +299,9 @@ class NativeSwitch:
             self.send(ok,addr)
             self.emit('call.ivr.started',call)
         else:
-            self.plan.incoming(call_id,addr[0],called)
+            new_call=self.plan.incoming(call_id,addr[0],called)
+            if route.queue in self.queue_skill_overrides:
+                new_call.required_skills=self.queue_skill_overrides[route.queue]
             self.emit('call.queued',call)
             ringing=response(msg,180,to_tag=call.local_tag)
             self.send(ringing,addr)
@@ -418,17 +429,21 @@ class NativeSwitch:
             session=call.ivr
             session.seen_digits.append(digit)
             queue=session.menu.digits.get(digit)
-            if queue:
+            if queue and queue in self.enabled_queues:
                 await self._route_ivr(call,queue)
             else:
                 await self._retry_ivr(call)
 
     async def _route_ivr(self,call:LiveCall,queue:str)->None:
         if not call.ivr or call.state!='ivr':return
+        if queue not in self.enabled_queues:
+            self.emit('call.ivr.disabled_queue',call)
+            await self._retry_ivr(call)
+            return
         call.media.stop_ivr()
         call.queue=queue
         route=self.routes_by_queue[queue]
-        self.acd.enqueue(call.trunk_call_id,queue,route.skills,route.priority)
+        self.acd.enqueue(call.trunk_call_id,queue,self.queue_skill_overrides.get(queue,route.skills),route.priority)
         call.ivr=None
         call.state='offering'
         self.emit('call.ivr.selected',call)
@@ -440,7 +455,7 @@ class NativeSwitch:
         session=call.ivr
         session.attempts+=1
         if session.attempts>=session.menu.max_attempts:
-            if session.menu.fallback_queue:
+            if session.menu.fallback_queue and session.menu.fallback_queue in self.enabled_queues:
                 await self._route_ivr(call,session.menu.fallback_queue)
             else:
                 self.emit('call.ivr.no_selection',call)
@@ -545,6 +560,15 @@ class NativeSwitch:
         while True:
             await asyncio.sleep(0.2)
             async with self._lock:
+                if self.event_writer:
+                    sync=getattr(self.event_writer,'sync_controls',None)
+                    if callable(sync):
+                        try:
+                            sync(self)
+                            self.control_sync_healthy=True
+                        except Exception:
+                            self.control_sync_healthy=False
+                            self.errors.append('native_control_sync_failed')
                 now=self.acd.clock()
                 for invite_id,(_,_,until) in list(self._cancelled.items()):
                     if time.monotonic()>until:self._cancelled.pop(invite_id,None)
@@ -623,8 +647,13 @@ async def _main():
         while True:
             await asyncio.sleep(10)
             if writer:
-                try: writer.heartbeat(server.event_feed_healthy)
-                except Exception: server.errors.append('native_health_write_failed')
+                try:
+                    remaining=writer.drain()
+                    server.event_feed_healthy=remaining==0
+                    writer.heartbeat(server.event_feed_healthy and server.control_sync_healthy)
+                except Exception:
+                    server.event_feed_healthy=False
+                    server.errors.append('native_health_write_failed')
     health_task=asyncio.create_task(health_loop()) if writer else None
     try: await asyncio.Event().wait()
     finally:

@@ -131,6 +131,14 @@ def dashboard():
     with connection() as db:
         queues = [dict(x) for x in db.execute('SELECT * FROM queues ORDER BY name')]
         agents = [dict(x) for x in db.execute('SELECT * FROM agents ORDER BY name')]
+        commands = {x['agent_id']: dict(x) for x in db.execute('SELECT * FROM native_agent_commands')}
+        managed_ids = {x['agent_id'] for x in db.execute('SELECT agent_id FROM native_agent_bindings')}
+        for agent in agents:
+            cmd=commands.get(agent['id'])
+            agent['native_managed']=agent['id'] in managed_ids
+            agent['desired_state']=cmd['desired_state'] if cmd else None
+            agent['control_state']=cmd['state'] if cmd else None
+            agent['control_revision']=cmd['revision'] if cmd else None
         calls = [dict(x) for x in db.execute('SELECT * FROM calls ORDER BY arrived_at DESC LIMIT 60')]
         for call in calls:
             call['wait_seconds'] = round(max(0, (call['answered_at'] or call['ended_at'] or now) - call['arrived_at']))

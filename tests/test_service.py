@@ -59,7 +59,7 @@ def test_workflow(tmp_path):
         heartbeat=client.post('/api/engine/heartbeat', json={'source':'queuepilot-native','connected':True}, headers=key)
         assert heartbeat.status_code==200
         assert client.get('/api/dashboard',headers=auth).json()['integration']['connected'] is True
-        assert client.patch('/api/agents/'+aid+'/status',json={'status':'busy'},headers=auth).json()['scope']=='directory_only_not_sip_runtime'
+        assert client.patch('/api/agents/'+aid+'/status',json={'status':'busy'},headers=auth).json()['scope']=='directory_only_unmapped'
 
 
 def test_demo_seed(tmp_path):

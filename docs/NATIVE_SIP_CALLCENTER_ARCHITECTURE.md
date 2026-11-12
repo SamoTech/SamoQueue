@@ -155,3 +155,8 @@ reviewer approval and explicit opt-in are required; no additional PBX is used.
 One stereo WAV recording per call remains unchanged. This is a local lab stream,
 not production supervisor monitoring; Whisper/Barge remain unimplemented. See
 [`NATIVE_LIVE_LISTEN_LAB.md`](NATIVE_LIVE_LISTEN_LAB.md).
+
+
+### v1.3 runtime administrative sync + SQLite outbox
+
+See [the v1.3 local runtime guide](NATIVE_RUNTIME_SYNC_LAB.md). Dashboard commands for registered native agents synchronize into the local ACD when the agent is idle, new call admission observes queue enabled status and skill overrides, and an on-host SQLite outbox replays events that were successfully journaled before a temporary ingest failure. This is not a production queue broker, live call crash recovery, or multi-node failover. **Only the native SIP lab runtime** is allowed to control its own agent/media state.

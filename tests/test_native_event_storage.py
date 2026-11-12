@@ -50,7 +50,7 @@ def test_native_writer_rejects_unknown_routes_and_agents(tmp_path):
     config.db_path=tmp_path/'refuse.sqlite'
     init_db()
     queue=create_queue('Native Support')
-    with pytest.raises(ValueError,match='unknown/disabled'):
+    with pytest.raises(ValueError,match='unknown QueuePilot queue'):
         LocalEventWriter([IngressRoute('6000','not-in-local-db')],{})
     with pytest.raises(ValueError,match='agent mapping'):
         LocalEventWriter([IngressRoute('6000',queue)],{'not-in-db':('1001',frozenset())})

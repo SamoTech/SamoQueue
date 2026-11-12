@@ -101,3 +101,8 @@ Source deletions do **not** mean customer-data deletion. Historical `aura_*` tab
 - 31 local tests passed at cleanup review, later tests may increase.
 - Python compilation and JavaScript syntax validation required.
 - No claim of real Avaya telephone interop, recording playback from native RTP, voice IVR, or production readiness.
+
+
+## v1.3 follow-up
+
+Added lab-only native Dashboard command synchronization and a persisted SQLite event outbox; see [runtime sync guide](NATIVE_RUNTIME_SYNC_LAB.md). The full SIP/RTP production, HA, safe crash recovery and real Avaya handset interoperability risks **remain open**.

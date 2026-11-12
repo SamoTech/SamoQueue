@@ -48,6 +48,34 @@ def init_db():
             outcome TEXT NOT NULL, PRIMARY KEY (source,event_id)
         );
         CREATE INDEX IF NOT EXISTS idx_events_occurred ON events(occurred_at);
+        -- Local-only runtime coordination: never a remote PBX command channel.
+        CREATE TABLE IF NOT EXISTS native_agent_bindings (
+            agent_id TEXT PRIMARY KEY REFERENCES agents(id),
+            extension TEXT NOT NULL, bound_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS native_agent_commands (
+            agent_id TEXT PRIMARY KEY REFERENCES agents(id),
+            desired_state TEXT NOT NULL CHECK(desired_state IN ('ready','aux','offline')),
+            revision INTEGER NOT NULL DEFAULT 1,
+            applied_revision INTEGER NOT NULL DEFAULT 0,
+            state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','applied','deferred')),
+            requested_at REAL NOT NULL, applied_at REAL
+        );
+        -- A persisted event outbox allows replay after a transient DB ingest failure.
+        -- No caller identity or audio is held in the journal.
+        CREATE TABLE IF NOT EXISTS native_event_outbox (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL UNIQUE,
+            event_type TEXT NOT NULL,
+            call_id TEXT NOT NULL,
+            queue_id TEXT NOT NULL,
+            agent_id TEXT,
+            occurred_at REAL NOT NULL,
+            delivered_at REAL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_native_outbox_pending ON native_event_outbox(delivered_at,seq);
         CREATE TABLE IF NOT EXISTS engine_heartbeats (
             source TEXT PRIMARY KEY, engine_healthy INTEGER NOT NULL,
             last_heartbeat REAL NOT NULL, details TEXT NOT NULL DEFAULT ''
