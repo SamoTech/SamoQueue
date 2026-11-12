@@ -3,6 +3,7 @@ import datetime as dt
 import hmac
 import io
 import random
+import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -13,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import APP_VERSION, config, validate_config
 from .db import connection, init_db
 from .audit import audit
-from .models import AgentIn, AgentStatusIn, EngineEvent, EngineHeartbeat, Login, QueueIn
+from .models import AgentIn, AgentStatusIn, NativeCallControlIn, EngineEvent, EngineHeartbeat, Login, QueueIn
 from .security import encode_token, require_admin, require_engine_event, require_supervisor
 from .service import create_agent, create_queue, dashboard, ingest, seed_demo
 from .contact_center import router as contact_center_router
@@ -107,6 +108,42 @@ def edit_status(aid: str, status: AgentStatusIn, actor=Depends(require_admin)):
         db.execute('UPDATE agents SET status=?,last_change=? WHERE id=?', (status.status,time.time(),aid))
         audit(db,actor,'directory_agent.status_updated',aid,f'status={status.status}')
         return {'id':aid,'updated':True,'scope':'directory_only_unmapped'}
+
+@app.post('/api/engine/calls/{call_id}/control', status_code=202)
+def request_call_control(call_id: str, body: NativeCallControlIn, actor=Depends(require_admin)):
+    # This only queues an intent. Never claim the telephone has been held until
+    # the native SIP runtime acknowledges the command under its own lock.
+    if config.demo_mode:
+        raise HTTPException(403,'Live call controls are unavailable in demo mode')
+    if not call_id or len(call_id)>160:
+        raise HTTPException(422,'Invalid call ID')
+    command_id='ctl_'+uuid.uuid4().hex
+    with connection() as db:
+        call=db.execute("SELECT id,status,external_id FROM calls WHERE id=? AND source='queuepilot-native'",(call_id,)).fetchone()
+        if not call:
+            raise HTTPException(404,'Native call not found')
+        if call['status']!='answered':
+            raise HTTPException(409,'Only an answered native call can be held or resumed')
+        # An engine heartbeat does not prove an active call, but prevents obviously
+        # stale commands accumulating while the standalone native runtime is down.
+        heartbeat=db.execute("SELECT engine_healthy,last_heartbeat FROM engine_heartbeats WHERE source='queuepilot-native'").fetchone()
+        if not heartbeat or not heartbeat['engine_healthy'] or time.time()-heartbeat['last_heartbeat']>30:
+            raise HTTPException(503,'Native runtime is not reporting healthy')
+        try:
+            db.execute("""INSERT INTO native_call_controls(id,call_id,action,actor,state,requested_at)
+                          VALUES(?,?,?,?, 'pending',?)""",
+                       (command_id,call['external_id'],body.action,actor,time.time()))
+        except sqlite3.IntegrityError:
+            raise HTTPException(409,'Another call-control command is pending') from None
+        audit(db,actor,'native_call.control_requested',call['external_id'],f'action={body.action};command={command_id}')
+    return {'id':command_id,'state':'pending','action':body.action}
+
+@app.get('/api/engine/calls/controls')
+def list_call_controls(_=Depends(require_admin)):
+    with connection() as db:
+        rows=[dict(row) for row in db.execute("""SELECT id,call_id,action,state,requested_at,processed_at,result
+                                FROM native_call_controls ORDER BY requested_at DESC LIMIT 100""")]
+    return {'commands':rows}
 
 @app.post('/api/engine/events')
 def receive_event(event: EngineEvent, _=Depends(require_engine_event)):

@@ -1,6 +1,16 @@
 # QueuePilot — Independent Contact Center Platform
 
-**الإصدار الحالي: v1.3 (Native SIP + Voice IVR + Single WAV + Live Listen + Codebase Cleanup Lab) — مرحلة تطوير واختبار، غير جاهز للإنتاج.**
+**الإصدار الحالي: v1.4 (Native SIP + Voice IVR + Single WAV + Live Listen + Supervisor Media Hold Lab) — مرحلة تطوير واختبار، غير جاهز للإنتاج.**
+
+## v1.4 — Hold / Resume من لوحة المشرف (تجربة معملية)
+
+- أُضيف **Server-side Hold/Resume** للمكالمات المتصلة: المشرف يرسل أمرًا معتمدًا من لوحة التحكم، ويُحفظ Pending في `native_call_controls` حتى يطبقه محرك SIP على نفس المضيف تحت قفل التشغيل.
+- عند Hold، يوقف QueuePilot تمرير RTP بين الطرفين ويصدر **صمت G.711** إلى العميل (ليس Music on Hold). وعند Resume يعود نقل الصوت دون إنشاء جلسة أو تسجيل جديد.
+- كل مكالمة تظل في **ملف WAV ستيريو واحد**، حتى لو استخدم المشرف Hold عدة مرات. لا يوجد ملف تسجيل منفصل للـHold.
+- يمنع API الأوامر المكررة أو غير المصرح بها؛ الأوامر القديمة أو الموجهة لمكالمات منتهية تُرفض، وكل طلب ونتيجة موثّق في Audit Log. Dashboard يوضح Pending/Applied/Rejected.
+- **تنبيه:** دعم زر Hold الموجود على التليفون عبر SIP re-INVITE، وMusic on Hold، والتحويل Transfer لم يكتمل بعد. لم يتم اختبار هذه النسخة على Avaya فعلية أو تأمينها للإنتاج.
+
+دليل إعداد وحدود الميزة: [`docs/NATIVE_HOLD_LAB.md`](docs/NATIVE_HOLD_LAB.md).
 
 ## v1.3 — ربط Dashboard بمحرك Native SIP/ACD (معمل فقط)
 
@@ -85,7 +95,7 @@ flowchart TD
 
 ## 4. الوظائف: المنفّذ حاليًا مقابل الهدف
 
-| الوظيفة | الحالة في v1.1 | ما ينقص للإنتاج |
+| الوظيفة | الحالة في v1.4 | ما ينقص للإنتاج |
 |---|---|---|
 | SIP REGISTER / مصادقة التليفون | ✅ اختبار محلي: Digest SHA-256 + nonce | توافق التليفونات الفعلية، TLS، تهيئة ومراقبة الأجهزة |
 | استقبال SIP من مصدر مسموح + DID mapping | ✅ اختبار معملي | تكامل Avaya Trunk الحقيقي وتوافق SIP/SDP |
@@ -100,7 +110,8 @@ flowchart TD
 | Single Call WAV | ✅ Lab: ملف واحد ستيريو (العميل يسار/الموظف يمين)، وربطه بالمكتبة بعد انتهاء المكالمة | دقة التوقيت/جودة الإنتاج، والموافقة والتوافق مع أجهزة Avaya |
 | Live Listen / Approval / Browser Audio Gateway | ✅ اختبار معملي: طلب Admin، موافقة Reviewer مستقلة، tap من RTP، بث PCM للمتصفح، إيقاف مُدقّق ومقيد | TLS/SRTP وRBAC وHA وAvaya interop واختبارات تشريعية/أمنية |
 | Whisper / Barge / Conference | ❌ مخطط | Mix/Inject Media وSIP Conference Controller |
-| Hold / Transfer / Music on Hold | ❌ غير مكتمل | تطوير كامل وإجراء اختبارات تداخل المكالمات |
+| Supervisor Hold / Resume من Dashboard | ✅ تجربة RTP محلية، بدون SIP re-INVITE | اختبار Avaya فعلي، Music on Hold، SRTP وSSRC/RTCP |
+| Phone Hold / Transfer / Music on Hold | ❌ غير مكتمل | SIP re-INVITE/REFER، تحويل داخلي، نغمة انتظار وإجراءات السلامة |
 | Reports / CSV / JSON / ZIP | 🟡 10 مجموعات بيانات | اكتمال الأحداث، مقاييس الإنتاج، استرجاع الأعطال وموثوقية الأرقام |
 | High Availability / Failover / PostgreSQL / SSO | ❌ غير منفذ | تنفيذ واعتماد تشغيلي |
 

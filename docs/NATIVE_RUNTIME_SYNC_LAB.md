@@ -39,3 +39,15 @@ node --check app/static/app.js
 ```
 
 Tests cover: authenticated dashboard requests, deferred commands during ringing/talking/ACW, no false availability before registration, queue disable and skill propagation, persisted retry after SQLite ingest failure, duplicate-event reconciliation after an ambiguous ACK, and existing single WAV/live monitor/IVR regressions.
+
+## v1.4 — One-shot supervisor media commands
+
+The `native_call_controls` table keeps a single pending hold/resume command
+per live SIP call. Admins request it through the authenticated dashboard and
+`LocalEventWriter.sync_call_controls()` verifies the bridged call under the
+native SIP lock. `applied` / `rejected` are durable acknowledgements with
+audit entries; no external telephony middleware is used. A stale command is
+rejected after a restart rather than replayed against a reused Call-ID.
+
+This is local RTP muting plus caller comfort silence, **not RFC 3264 SIP hold
+or PBX transfer**. See [NATIVE_HOLD_LAB.md](NATIVE_HOLD_LAB.md).

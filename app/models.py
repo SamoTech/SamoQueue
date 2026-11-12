@@ -49,6 +49,9 @@ class EngineEvent(BaseModel):
             raise ValueError('Agent events require agent_id and agent_status')
         return self
 
+class NativeCallControlIn(BaseModel):
+    action: Literal['hold','resume']
+
 class EngineHeartbeat(BaseModel):
     source: str = Field(min_length=1, max_length=48)
     connected: bool

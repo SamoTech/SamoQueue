@@ -61,6 +61,22 @@ def init_db():
             state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','applied','deferred')),
             requested_at REAL NOT NULL, applied_at REAL
         );
+        -- Supervisor-requested, local-only server-side RTP hold/resume.
+        -- Not an Avaya command and not yet RFC 3264 SIP endpoint hold.
+        CREATE TABLE IF NOT EXISTS native_call_controls (
+            id TEXT PRIMARY KEY,
+            call_id TEXT NOT NULL,
+            action TEXT NOT NULL CHECK(action IN ('hold','resume')),
+            actor TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','applied','rejected')),
+            requested_at REAL NOT NULL,
+            processed_at REAL,
+            result TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_native_call_control_pending
+            ON native_call_controls(call_id) WHERE state='pending';
+        CREATE INDEX IF NOT EXISTS idx_native_call_control_recent
+            ON native_call_controls(requested_at DESC);
         -- A persisted event outbox allows replay after a transient DB ingest failure.
         -- No caller identity or audio is held in the journal.
         CREATE TABLE IF NOT EXISTS native_event_outbox (

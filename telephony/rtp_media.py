@@ -55,6 +55,11 @@ class RtpRelay:
         self._recorder:StereoCallRecorder|None=None
         self.on_audio:Callable[[str,bytes,int],None]|None=None  # approved supervisor RTP tap, lab only
         self.packet_counts={'trunk':0,'phone':0}
+        self.held=False
+        self._hold_task:asyncio.Task|None=None
+        self._hold_seq=secrets.randbelow(65536)
+        self._hold_ts=secrets.randbits(32)
+        self._hold_ssrc=secrets.randbits(32)
         self.recorded_paths:dict[str,Path]={}
         self.recording_truncated:set[str]=set()
         self.ivr_active=False
@@ -151,6 +156,42 @@ class RtpRelay:
             self._recorder=StereoCallRecorder(path)
         self.enabled=True
 
+    def hold(self)->None:
+        """Local server-side hold; NOT RFC 3264 phone-initiated re-INVITE hold.
+
+        With G.711 calls, send outbound comfort silence to the caller while
+        blocking both legs. Do not create a second recording or monitor tap.
+        """
+        if not self.enabled or self.codec not in (0,8) or self.ivr_active or self.held:
+            raise ValueError('Hold requires an active unheld G.711 conversation')
+        self.held=True
+        self._hold_task=asyncio.create_task(self._send_hold_silence())
+
+    def resume(self)->None:
+        if not self.enabled or self.codec not in (0,8) or not self.held:
+            raise ValueError('Resume requires an active held G.711 conversation')
+        self.held=False
+        if self._hold_task:
+            self._hold_task.cancel()
+            self._hold_task=None
+
+    async def _send_hold_silence(self)->None:
+        # Clock-paced packet generator; remains inside QueuePilot's RTP anchor.
+        # A distinct SSRC is used for the lab comfort-silence source.
+        try:
+            while self.held and self.enabled and self.codec in (0,8):
+                leg=self.legs.get('trunk')
+                if leg is None:
+                    break
+                silence=0xff if self.codec==0 else 0xd5
+                p=struct.pack('!BBHII',0x80,self.codec,self._hold_seq,self._hold_ts,self._hold_ssrc)+bytes([silence])*160
+                leg.transport.sendto(p,(leg.remote.host,leg.remote.port))
+                self._hold_seq=(self._hold_seq+1)&0xffff
+                self._hold_ts=(self._hold_ts+160)&0xffffffff
+                await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            return
+
     def forward(self,side:str,packet:bytes,src:tuple[str,int])->None:
         if not self.enabled or (self.codec is None and not self.ivr_active) or len(packet)<12 or packet[0]>>6!=2:
             return
@@ -181,6 +222,8 @@ class RtpRelay:
                 self._ivr_digit(payload,packet)
             return  # IVR media is local; never forward to an unconnected phone
         if payload_type!=self.codec:return
+        if self.held:
+            return  # prevent both RTP directions reaching the other party/recorder/observer
         other='phone' if side=='trunk' else 'trunk'
         target=self.legs.get(other)
         if not target:return
@@ -198,6 +241,10 @@ class RtpRelay:
                 self.recording_truncated.add('conversation')
 
     def close(self):
+        self.held=False
+        if self._hold_task:
+            self._hold_task.cancel()
+            self._hold_task=None
         self.on_audio = None
         self.stop_ivr()
         self.enabled=False

@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from app.config import config
+from app.audit import audit
 from app.db import connection, init_db
 from app.models import EngineEvent
 from app.service import ingest
@@ -132,6 +133,35 @@ class LocalEventWriter:
             for status,at,agent_id,expected in observed:
                 db.execute('''UPDATE agents SET status=?,last_change=?
                            WHERE id=? AND status<>?''',(status,at,agent_id,expected))
+
+    def sync_call_controls(self, server) -> None:
+        """Consume local hold/resume intents only under the native switch lock.
+
+        Commands are one-shot, never blindly replayed after a crash. Any old or
+        invalid call is rejected, not applied to a reused SIP Call-ID.
+        """
+        with connection() as db:
+            pending=[dict(row) for row in db.execute("""SELECT * FROM native_call_controls
+                                     WHERE state='pending' ORDER BY requested_at,id LIMIT 100""")]
+        for cmd in pending:
+            call=server.calls.get(cmd['call_id'])
+            if call is None or cmd['requested_at'] < call.started_wall - 0.25:
+                result='call_not_active_or_stale'
+                state='rejected'
+            else:
+                try:
+                    server.apply_call_control(cmd['call_id'],cmd['action'])
+                    result='native_rtp_lab'
+                    state='applied'
+                except (ValueError, RuntimeError, OSError):
+                    result='call_not_bridged_or_invalid_state'
+                    state='rejected'
+            with connection() as db:
+                db.execute("""UPDATE native_call_controls SET state=?,processed_at=?,result=?
+                              WHERE id=? AND state='pending' """,
+                           (state,time.time(),result,cmd['id']))
+                audit(db,cmd['actor'],'native_call.control_'+state,cmd['call_id'],
+                      f'action={cmd["action"]};command={cmd["id"]};reason={result}')
 
     def archive_media(self, call, paths: dict[str, Path]) -> list[str]:
         if not paths or self.recording_capture_dir is None:

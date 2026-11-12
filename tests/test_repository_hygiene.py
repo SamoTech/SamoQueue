@@ -44,4 +44,4 @@ def test_runtime_requirements_are_not_test_tooling():
 
 
 def test_application_version_is_consistent():
-    assert app.version == APP_VERSION == '1.3.0-lab'
+    assert app.version == APP_VERSION == '1.4.0-lab'

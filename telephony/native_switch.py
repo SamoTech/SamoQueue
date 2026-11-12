@@ -6,7 +6,7 @@ external PBX. Unsupported requests fail closed; never deploy on production
 Avaya trunks, record customer audio, or advertise as a full RFC 3261 B2BUA.
 
 Known gaps: retransmissions/transaction timers, TLS/SRTP, Avaya SIP extensions,
-provisioning, transfer/hold/reINVITE, production IVR deployment, transcoding, multi-node, RTP security,
+provisioning, phone-initiated SIP hold/reINVITE, transfer, transcoding, multi-node, RTP security,
 conference monitoring, high availability and durable real-time reports.
 """
 from __future__ import annotations
@@ -102,6 +102,8 @@ class LiveCall:
     answered_at:float|None=None
     ivr:IvrSession|None=None
     trunk_established:bool=False
+    on_hold:bool=False
+    started_wall:float=field(default_factory=time.time)
 
 
 class _Udp(asyncio.DatagramProtocol):
@@ -180,6 +182,26 @@ class NativeSwitch:
                 if len(self.errors)>1000: self.errors.pop(0)
                 try: self.event_writer.heartbeat(False)
                 except Exception: pass
+
+    def apply_call_control(self,call_id:str, action:str)->None:
+        """Called only under NativeSwitch._lock by the local command consumer."""
+        call=self.calls.get(call_id)
+        if call is None or call.state!='bridged' or not call.phone_addr:
+            raise ValueError('Call is not an active bridged conversation')
+        if action=='hold':
+            if call.on_hold:
+                raise ValueError('Call is already held')
+            call.media.hold()
+            call.on_hold=True
+            self.emit('call.held',call)
+        elif action=='resume':
+            if not call.on_hold:
+                raise ValueError('Call is not held')
+            call.media.resume()
+            call.on_hold=False
+            self.emit('call.resumed',call)
+        else:
+            raise ValueError('Unsupported call control action')
 
     def send(self,data:bytes,addr:tuple[str,int]):
         if self.transport:
@@ -540,6 +562,7 @@ class NativeSwitch:
             self.emit('call.abandoned',call)
         if call.phone_call_id and call.phone_addr and call.outbound_invite and call.state=='offering':
             self._cancelled[call.phone_call_id]=(call.phone_addr,parse_message(call.outbound_invite),time.monotonic()+64)
+        call.on_hold=False
         call.media.close()
         if call.media.recording_truncated:
             self.errors.append('native_recording_truncated')
@@ -569,6 +592,13 @@ class NativeSwitch:
                         except Exception:
                             self.control_sync_healthy=False
                             self.errors.append('native_control_sync_failed')
+                apply_controls=getattr(self.event_writer,'sync_call_controls',None)
+                if callable(apply_controls):
+                    try:
+                        apply_controls(self)
+                    except Exception:
+                        self.errors.append('native_call_control_sync_failed')
+                        self.control_sync_healthy=False
                 now=self.acd.clock()
                 for invite_id,(_,_,until) in list(self._cancelled.items()):
                     if time.monotonic()>until:self._cancelled.pop(invite_id,None)

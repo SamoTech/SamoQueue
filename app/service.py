@@ -140,7 +140,18 @@ def dashboard():
             agent['control_state']=cmd['state'] if cmd else None
             agent['control_revision']=cmd['revision'] if cmd else None
         calls = [dict(x) for x in db.execute('SELECT * FROM calls ORDER BY arrived_at DESC LIMIT 60')]
+        control_rows=db.execute('''SELECT c.call_id,c.action,c.state,c.result FROM native_call_controls c
+                              WHERE c.requested_at=(SELECT max(x.requested_at) FROM native_call_controls x
+                                                    WHERE x.call_id=c.call_id)''').fetchall()
+        control_by_call={x['call_id']:dict(x) for x in control_rows}
+        applied_rows=db.execute("""SELECT call_id,action FROM native_call_controls
+                            WHERE state='applied' ORDER BY processed_at DESC,id DESC""").fetchall()
+        hold_by_call={}
+        for item in applied_rows:
+            hold_by_call.setdefault(item['call_id'],item['action']=='hold')
         for call in calls:
+            call['control']=control_by_call.get(call['external_id']) if call['source']=='queuepilot-native' else None
+            call['hold_active']=hold_by_call.get(call['external_id'],False) if call['source']=='queuepilot-native' else False
             call['wait_seconds'] = round(max(0, (call['answered_at'] or call['ended_at'] or now) - call['arrived_at']))
             call['external_id'] = call['external_id'][-12:]
         active_calls = [dict(x) for x in db.execute("SELECT queue_id,status,arrived_at FROM calls WHERE status IN ('queued','answered')")]
