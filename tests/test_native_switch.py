@@ -40,7 +40,7 @@ async def receive(loop,s,timeout=1.5):
     return parse_message(data)
 
 
-async def exercise(tmp_path):
+async def exercise(tmp_path,event_writer=None):
     loop=asyncio.get_running_loop()
     free=udp_socket()
     port=free.getsockname()[1]
@@ -48,7 +48,7 @@ async def exercise(tmp_path):
     server=NativeSwitch(Config('127.0.0.1',port,'127.0.0.1',('127.0.0.1/32',),('127.0.0.1/32',),('127.0.0.1/32',),
                                (IngressRoute('6000','support',frozenset({'english'})),),
                                {'agent1':('1001',frozenset({'english'}))},{'1001':'long-personal-password'},
-                               'queuepilot.local',b'0123456789abcdef0123456789abcdef',record_directory=tmp_path))
+                               'queuepilot.local',b'0123456789abcdef0123456789abcdef',record_directory=tmp_path,recording_notice_confirmed=True),event_writer=event_writer)
     phone=udp_socket();trunk=udp_socket();phone_media=udp_socket();trunk_media=udp_socket()
     await server.start()
     try:
@@ -125,10 +125,10 @@ async def exercise(tmp_path):
         assert server.acd.calls['customer-1'].state=='completed'
         assert 'customer-1' not in server.calls
         assert [e['event'] for e in server.events]==['call.queued','call.offered','call.answered','call.bridged','call.completed']
-        with wave.open(str(tmp_path/'customer-1-trunk.wav'),'rb') as w:
+        with wave.open(str(next(tmp_path.glob('customer-1-*-trunk.wav'))),'rb') as w:
             assert w.getframerate()==8000
             assert w.getnframes()==160
-        with wave.open(str(tmp_path/'customer-1-phone.wav'),'rb') as w:
+        with wave.open(str(next(tmp_path.glob('customer-1-*-phone.wav'))),'rb') as w:
             assert w.getnframes()==160
     finally:
         await server.stop()

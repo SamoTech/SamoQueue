@@ -71,6 +71,9 @@ class RtpRelay:
         self.codec:int|None=None
         self._writers:dict[str,wave.Wave_write]={}
         self.packet_counts={'trunk':0,'phone':0}
+        self.recorded_paths:dict[str,Path]={}
+        self._recorded_frames={'trunk':0,'phone':0}
+        self.recording_truncated:set[str]=set()
 
     async def open(self)->None:
         loop=asyncio.get_running_loop()
@@ -101,6 +104,7 @@ class RtpRelay:
                 writer.setsampwidth(2)
                 writer.setframerate(8000)
                 self._writers[side]=writer
+                self.recorded_paths[side]=path
         self.enabled=True
 
     def forward(self,side:str,packet:bytes,src:tuple[str,int])->None:
@@ -134,13 +138,21 @@ class RtpRelay:
         self.packet_counts[side]+=1
         if side in self._writers:
             table=_MULAW_PCM if self.codec==0 else _ALAW_PCM
-            self._writers[side].writeframesraw(b''.join(table[c] for c in payload))
+            # Keep captures bounded; oversized legs are not archived as complete calls.
+            if self._recorded_frames[side]+len(payload) <= 8_000 * 1_800:
+                self._writers[side].writeframesraw(b''.join(table[c] for c in payload))
+                self._recorded_frames[side]+=len(payload)
+            else:
+                self.recording_truncated.add(side)
 
     def close(self):
         self.enabled=False
         for writer in self._writers.values():
             writer.close()
         self._writers.clear()
+        # A call with no RTP has no playable recording to archive.
+        self.recorded_paths={side:path for side,path in self.recorded_paths.items()
+                             if self._recorded_frames.get(side,0)>0 and side not in self.recording_truncated}
         for leg in self.legs.values():
             leg.transport.close()
         self.legs.clear()

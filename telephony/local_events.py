@@ -10,6 +10,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import time
 import uuid
+from pathlib import Path
+
+from app.config import config
+from .recording_archive import NativeRecordingArchive
 
 from app.db import connection, init_db
 from app.models import EngineEvent
@@ -19,7 +23,13 @@ from app.service import ingest
 class LocalEventWriter:
     """Optional event sink for NativeSwitch running beside the dashboard."""
 
-    def __init__(self, routes, agents):
+    def __init__(self, routes, agents, *, recording_capture_dir: Path | None = None,
+                 recording_notice_confirmed: bool = False):
+        if recording_capture_dir is not None:
+            if not recording_notice_confirmed or not config.recordings_enabled:
+                raise ValueError('Recording requires explicit notice policy approval and RECORDINGS_ENABLED=true')
+        self.recording_capture_dir = recording_capture_dir
+        self.recording_notice_confirmed = recording_notice_confirmed
         init_db()
         with connection() as db:
             for route in routes:
@@ -42,6 +52,14 @@ class LocalEventWriter:
             occurred_at=datetime.now(timezone.utc),
         )
         ingest(payload)
+
+    def archive_media(self, call, paths: dict[str, Path]) -> list[str]:
+        """Archive finalized PCM WAV legs; call.completed event must already exist."""
+        if not paths or self.recording_capture_dir is None:
+            return []
+        return NativeRecordingArchive(self.recording_capture_dir,
+                                      notice_confirmed=self.recording_notice_confirmed).store(
+                                          call.trunk_call_id, paths)
 
     def heartbeat(self, connected: bool) -> None:
         with connection() as db:

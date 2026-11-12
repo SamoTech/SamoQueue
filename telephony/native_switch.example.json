@@ -12,5 +12,6 @@
   "extension_passwords": {"1001": "REPLACE_WITH_A_UNIQUE_STRONG_16_CHARACTER_SIP_PASSWORD"},
   "offer_seconds": 20,
   "record_calls": false,
+  "recording_notice_confirmed": false,
   "record_directory": "./data/lab-recordings"
 }

@@ -106,3 +106,16 @@ Collect **IP phone make/model, firmware and SIP mode**, how those phones current
 - DTMF: RFC 4733, https://www.rfc-editor.org/rfc/rfc4733
 - SIP digest: RFC 8760, https://www.rfc-editor.org/rfc/rfc8760
 - Avaya Aura SM SIP entity links: https://documentation.avaya.com/en-us/home/bundle/session-manager/avayasessionmanageradministering_10-3-x/session-manager-routing/entity-links.html
+
+### v0.8 consent-gated native recording archive (lab only)
+
+The native RTP relay can optionally capture the inbound trunk and agent phone
+directions as separate mono 8 kHz WAV files. A QueuePilot-owned local archive
+indexes each finalized direction to the same internal call row after the terminal
+call event is persisted, with a distinct media-leg source, authenticated supervisor
+playback, deduplication and an audit record. This operates only with explicit
+`record_calls`, `recording_notice_confirmed`, `RECORDINGS_ENABLED`, and
+`--local-events` configuration. Recording remains disabled by default. The two
+tracks are NOT synchronized or mixed, and this is not a production recording
+solution, consent enforcement system or live monitoring/IVR bridge. See
+[`NATIVE_RECORDING_LAB.md`](NATIVE_RECORDING_LAB.md).

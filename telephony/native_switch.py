@@ -43,6 +43,7 @@ class Config:
     nonce_secret: bytes
     offer_seconds: int=20
     record_directory:Path|None=None
+    recording_notice_confirmed:bool=False
 
     def __post_init__(self):
         if not self.avaya_peers or not self.phone_networks or not self.media_networks or not self.did_routes or not self.agent_bindings:
@@ -59,6 +60,8 @@ class Config:
                 raise ValueError(f'Agent extension {ext} missing SIP credentials')
             if self.extension_passwords[ext].startswith('REPLACE_') or len(self.extension_passwords[ext])<16:
                 raise ValueError('Weak or placeholder phone credential')
+        if self.record_directory is not None and not self.recording_notice_confirmed:
+            raise ValueError('Recording requires notice/consent policy confirmation')
         if self.offer_seconds<2:
             raise ValueError('Invalid offer timeout')
 
@@ -378,7 +381,7 @@ class NativeSwitch:
             return
         if call.state=='answered_wait_ack':
             try:
-                call.media.connect(call.trunk_media.codec,re.sub(r'[^a-zA-Z0-9-]','_',call.trunk_call_id)[:80])
+                call.media.connect(call.trunk_media.codec,re.sub(r'[^a-zA-Z0-9-]','_',call.trunk_call_id)[:64]+'-'+secrets.token_hex(8))
                 call.state='bridged'
                 self.emit('call.bridged',call)
             except (OSError,ValueError):
@@ -432,6 +435,17 @@ class NativeSwitch:
         if call.phone_call_id and call.phone_addr and call.outbound_invite and call.state=='offering':
             self._cancelled[call.phone_call_id]=(call.phone_addr,parse_message(call.outbound_invite),time.monotonic()+64)
         call.media.close()
+        if call.media.recording_truncated:
+            self.errors.append('native_recording_truncated')
+        if self.event_writer and call.media.recorded_paths:
+            archive_media=getattr(self.event_writer,'archive_media',None)
+            if callable(archive_media):
+                try:
+                    archive_media(call,call.media.recorded_paths)
+                except Exception:
+                    self.errors.append('native_recording_archive_failed')
+                    self.event_feed_healthy=False
+                    if len(self.errors)>1000: self.errors.pop(0)
         self.calls.pop(call.trunk_call_id,None)
         if call.phone_call_id:self.phone_calls.pop(call.phone_call_id,None)
         call.state='ended'
@@ -467,10 +481,11 @@ def config_from_json(path:Path)->Config:
     if secret.startswith('REPLACE_') or len(secret)<32:
         raise ValueError('Configure unique nonce_secret (32+ characters)')
     directory=Path(obj['record_directory']) if obj.get('record_calls',False) else None
+    notice_confirmed=obj.get('recording_notice_confirmed',False) is True
     return Config(str(obj.get('listen_ip','127.0.0.1')),int(obj.get('listen_port',15060)),str(obj.get('advertised_ip','127.0.0.1')),
                   tuple(obj['avaya_peers']),tuple(obj['phone_networks']),tuple(obj['media_networks']),routes,
                   bindings,{str(k):str(v) for k,v in obj['extension_passwords'].items()},
-                  str(obj.get('sip_realm','queuepilot.local')),secret.encode('utf-8'),int(obj.get('offer_seconds',20)),directory)
+                  str(obj.get('sip_realm','queuepilot.local')),secret.encode('utf-8'),int(obj.get('offer_seconds',20)),directory,notice_confirmed)
 
 
 async def _main():
@@ -484,7 +499,9 @@ async def _main():
     writer=None
     if args.local_events:
         from .local_events import LocalEventWriter
-        writer=LocalEventWriter(config.did_routes,config.agent_bindings)
+        writer=LocalEventWriter(config.did_routes,config.agent_bindings,
+                                recording_capture_dir=config.record_directory,
+                                recording_notice_confirmed=config.recording_notice_confirmed)
     server=NativeSwitch(config,event_writer=writer)
     await server.start()
     if writer: writer.heartbeat(True)
