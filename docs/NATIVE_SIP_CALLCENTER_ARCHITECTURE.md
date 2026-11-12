@@ -106,3 +106,57 @@ Collect **IP phone make/model, firmware and SIP mode**, how those phones current
 - DTMF: RFC 4733, https://www.rfc-editor.org/rfc/rfc4733
 - SIP digest: RFC 8760, https://www.rfc-editor.org/rfc/rfc8760
 - Avaya Aura SM SIP entity links: https://documentation.avaya.com/en-us/home/bundle/session-manager/avayasessionmanageradministering_10-3-x/session-manager-routing/entity-links.html
+
+### v0.8 consent-gated native recording archive (lab only)
+
+The native RTP relay can optionally capture the inbound trunk and agent phone
+directions as separate mono 8 kHz WAV files. A QueuePilot-owned local archive
+indexes each finalized direction to the same internal call row after the terminal
+call event is persisted, with a distinct media-leg source, authenticated supervisor
+playback, deduplication and an audit record. This operates only with explicit
+`record_calls`, `recording_notice_confirmed`, `RECORDINGS_ENABLED`, and
+`--local-events` configuration. Recording remains disabled by default. The two
+tracks are NOT synchronized or mixed, and this is not a production recording
+solution, consent enforcement system or live monitoring/IVR bridge. See
+[`NATIVE_RECORDING_LAB.md`](NATIVE_RECORDING_LAB.md).
+
+
+### v0.9 — One recording file per call (lab only)
+
+`StereoCallRecorder` inside `telephony/stereo_recording.py` records both RTP
+legs to a **single two-channel PCM16 8 kHz WAV**: caller/trunk is LEFT,
+agent/phone is RIGHT. Each stream's RTP timestamp spacing is retained,
+while initial arrival on a monotonic clock gives an approximate shared
+timeline. Missing packets/speech are silent, with a 500ms reordering window.
+This cannot replace full RTP/RTCP clock drift correction or secure SRTP.
+After verified commit to the authenticated recording library, the transient
+source WAV is removed; retry is idempotent and a partial unique DB index
+prevents two native-conversation records per call. Previous v0.8 mono archive
+rows are preserved as historical records, without destructive migration.
+Recording is OFF by default and still requires explicit policy approval.
+
+Recording does NOT provide IVR audio, live listening, whisper, barge,
+recording notices, call transfer, or production SIP/SRTP security.
+
+
+### v1.0 — Native one-level voice IVR lab
+
+An **optional, explicitly configured IVR menu** on one trusted DID answers the SIP trunk leg, plays local PCM WAV prompts as QueuePilot-generated G.711 RTP, and accepts end-flagged RFC4733 DTMF events before dispatching to an approved queue. No external PBX or media middleware.
+
+The recording remains **one stereo WAV per agent-connected call**. The native IVR is local JSON-driven; the dashboard's graphical drafts do not deploy to it. It does not implement TTS, multilevel logic, prompt version distribution, holiday schedules, production transport security or Avaya hardware interop. See [`NATIVE_IVR_LAB.md`](NATIVE_IVR_LAB.md).
+
+
+### v1.1 native listen-only observation lab
+
+`telephony/live_monitor.py` now attaches a read-only G.711 PCM audio tap to an
+**approved, established QueuePilot native call** and streams an 8kHz-to-16kHz
+mono mix to the management service's authenticated browser relay. Independent
+reviewer approval and explicit opt-in are required; no additional PBX is used.
+One stereo WAV recording per call remains unchanged. This is a local lab stream,
+not production supervisor monitoring; Whisper/Barge remain unimplemented. See
+[`NATIVE_LIVE_LISTEN_LAB.md`](NATIVE_LIVE_LISTEN_LAB.md).
+
+
+### v1.3 runtime administrative sync + SQLite outbox
+
+See [the v1.3 local runtime guide](NATIVE_RUNTIME_SYNC_LAB.md). Dashboard commands for registered native agents synchronize into the local ACD when the agent is idle, new call admission observes queue enabled status and skill overrides, and an on-host SQLite outbox replays events that were successfully journaled before a temporary ingest failure. This is not a production queue broker, live call crash recovery, or multi-node failover. **Only the native SIP lab runtime** is allowed to control its own agent/media state.

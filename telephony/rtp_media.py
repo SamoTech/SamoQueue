@@ -1,4 +1,4 @@
-"""Lab-only in-process G.711 RTP anchoring, with optional per-leg WAV diagnostics.
+"""Lab-only in-process G.711 RTP anchoring, with optional ONE stereo WAV.
 
 It relays packet payloads only after both call legs agree on one G.711 codec.
 No SRTP, RTCP, jitter buffer, PLC, resampling or conference mixing yet.
@@ -9,33 +9,16 @@ from __future__ import annotations
 import asyncio
 import os
 import struct
-import wave
+import secrets
+from typing import Callable
+
+from .ivr import encode_prompt
 from dataclasses import dataclass
 from pathlib import Path
 
 from .sip_stack import MediaAddress
+from .stereo_recording import StereoCallRecorder
 
-
-def decode_ulaw(byte:int) -> int:
-    v=(~byte)&255
-    segment=(v>>4)&7
-    t=((v&15)<<3)+132
-    t<<=segment
-    return (132-t) if v&128 else (t-132)
-
-
-def decode_alaw(byte:int) -> int:
-    v=byte^0x55
-    segment=(v&0x70)>>4
-    t=(v&15)<<4
-    if segment==0: t+=8
-    elif segment==1: t+=0x108
-    else: t=(t+0x108)<<(segment-1)
-    return t if v&128 else -t
-
-
-_MULAW_PCM=tuple(struct.pack('<h',decode_ulaw(x)) for x in range(256))
-_ALAW_PCM=tuple(struct.pack('<h',decode_alaw(x)) for x in range(256))
 
 
 @dataclass
@@ -58,8 +41,8 @@ class RtpRelay:
     """A media anchor whose addresses belong to QueuePilot, not Avaya/phones.
 
     Rejects unsolicited RTP and unexpected payload type; relays only on
-    established calls. Records each direction separately so there is no claim
-    of time-aligned/stereo or conference-quality capture.
+    established calls. Captures both directions to one approximately-aligned
+    stereo WAV (caller left, agent right). No conference mixing is claimed.
     """
 
     def __init__(self, bind_host:str, advertised_host:str, recording_directory:Path|None=None):
@@ -69,8 +52,21 @@ class RtpRelay:
         self.legs:dict[str,MediaLeg]={}
         self.enabled=False
         self.codec:int|None=None
-        self._writers:dict[str,wave.Wave_write]={}
+        self._recorder:StereoCallRecorder|None=None
+        self.on_audio:Callable[[str,bytes,int],None]|None=None  # approved supervisor RTP tap, lab only
         self.packet_counts={'trunk':0,'phone':0}
+        self.held=False
+        self._hold_task:asyncio.Task|None=None
+        self._hold_seq=secrets.randbelow(65536)
+        self._hold_ts=secrets.randbits(32)
+        self._hold_ssrc=secrets.randbits(32)
+        self.recorded_paths:dict[str,Path]={}
+        self.recording_truncated:set[str]=set()
+        self.ivr_active=False
+        self.dtmf_payload:int|None=None
+        self.on_digit:Callable[[str],None]|None=None
+        self._dtmf_seen:set[tuple[int,int,int]]=set()
+        self._prompt_task:asyncio.Task|None=None
 
     async def open(self)->None:
         loop=asyncio.get_running_loop()
@@ -84,34 +80,128 @@ class RtpRelay:
     def set_remote(self,side:str,remote:MediaAddress):
         self.legs[side].remote=remote
 
+    def start_ivr(self,dtmf_payload:int,callback:Callable[[str],None])->None:
+        if not (96 <= dtmf_payload <= 127) or self.codec is not None:
+            raise ValueError('IVR requires negotiated RFC4733 telephone-event')
+        self.ivr_active=True
+        self.enabled=True
+        self.dtmf_payload=dtmf_payload
+        self.on_digit=callback
+        self._dtmf_seen.clear()
+
+    def stop_ivr(self)->None:
+        self.ivr_active=False
+        self.enabled=False
+        self.dtmf_payload=None
+        self.on_digit=None
+        self._dtmf_seen.clear()
+        if self._prompt_task:
+            self._prompt_task.cancel()
+            self._prompt_task=None
+
+    def play_prompt(self,pcm:bytes,codec:int)->None:
+        if not self.ivr_active or codec not in (0,8):
+            raise ValueError('IVR is not active')
+        if self._prompt_task:
+            self._prompt_task.cancel()
+        self._prompt_task=asyncio.create_task(self._send_prompt(pcm,codec))
+
+    async def _send_prompt(self,pcm:bytes,codec:int)->None:
+        encoded=encode_prompt(pcm,codec)
+        seq=secrets.randbelow(65536)
+        timestamp=secrets.randbits(32)
+        ssrc=secrets.randbits(32)
+        leg=self.legs['trunk']
+        try:
+            for pos in range(0,len(encoded),160):
+                if not self.ivr_active:
+                    return
+                payload=encoded[pos:pos+160]
+                if len(payload)<160:
+                    payload+=bytes([0xff if codec==0 else 0xd5])*(160-len(payload))
+                rtp=struct.pack('!BBHII',0x80,codec,seq,timestamp,ssrc)+payload
+                leg.transport.sendto(rtp,(leg.remote.host,leg.remote.port))
+                seq=(seq+1)%65536
+                timestamp=(timestamp+160)%(2**32)
+                await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            return
+
+    def _ivr_digit(self,payload:bytes,packet:bytes)->None:
+        if len(payload)<4 or not self.on_digit:
+            return
+        number=payload[0]
+        if number not in range(12):
+            return
+        if not (payload[1]&0x80):
+            return  # only one completed key, never act on repeated start packets
+        key=(int.from_bytes(packet[8:12],'big'),int.from_bytes(packet[4:8],'big'),number)
+        if key in self._dtmf_seen:return
+        if len(self._dtmf_seen)>512:self._dtmf_seen.clear()
+        self._dtmf_seen.add(key)
+        digit='0123456789*#'[number]
+        self.on_digit(digit)
+
     def connect(self,codec:int,call_tag:str)->None:
         if codec not in (0,8) or self.legs['trunk'].remote.codec!=codec or self.legs['phone'].remote.codec!=codec:
             raise ValueError('RTP codec mismatch')
+        self.stop_ivr()
         self.codec=codec
         if self.recording_directory is not None:
             directory=self.recording_directory
             directory.mkdir(parents=True,exist_ok=True,mode=0o700)
             os.chmod(directory,0o700)
-            for side in ('trunk','phone'):
-                path=directory/f'{call_tag}-{side}.wav'
-                fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-                os.close(fd)
-                writer=wave.open(str(path),'wb')
-                writer.setnchannels(1)
-                writer.setsampwidth(2)
-                writer.setframerate(8000)
-                self._writers[side]=writer
+            # One recording file per call, no separate WAV legs.
+            path=directory/f'{call_tag}-conversation.wav'
+            self._recorder=StereoCallRecorder(path)
         self.enabled=True
 
+    def hold(self)->None:
+        """Local server-side hold; NOT RFC 3264 phone-initiated re-INVITE hold.
+
+        With G.711 calls, send outbound comfort silence to the caller while
+        blocking both legs. Do not create a second recording or monitor tap.
+        """
+        if not self.enabled or self.codec not in (0,8) or self.ivr_active or self.held:
+            raise ValueError('Hold requires an active unheld G.711 conversation')
+        self.held=True
+        self._hold_task=asyncio.create_task(self._send_hold_silence())
+
+    def resume(self)->None:
+        if not self.enabled or self.codec not in (0,8) or not self.held:
+            raise ValueError('Resume requires an active held G.711 conversation')
+        self.held=False
+        if self._hold_task:
+            self._hold_task.cancel()
+            self._hold_task=None
+
+    async def _send_hold_silence(self)->None:
+        # Clock-paced packet generator; remains inside QueuePilot's RTP anchor.
+        # A distinct SSRC is used for the lab comfort-silence source.
+        try:
+            while self.held and self.enabled and self.codec in (0,8):
+                leg=self.legs.get('trunk')
+                if leg is None:
+                    break
+                silence=0xff if self.codec==0 else 0xd5
+                p=struct.pack('!BBHII',0x80,self.codec,self._hold_seq,self._hold_ts,self._hold_ssrc)+bytes([silence])*160
+                leg.transport.sendto(p,(leg.remote.host,leg.remote.port))
+                self._hold_seq=(self._hold_seq+1)&0xffff
+                self._hold_ts=(self._hold_ts+160)&0xffffffff
+                await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            return
+
     def forward(self,side:str,packet:bytes,src:tuple[str,int])->None:
-        if not self.enabled or self.codec is None or len(packet)<12 or packet[0]>>6!=2:
+        if not self.enabled or (self.codec is None and not self.ivr_active) or len(packet)<12 or packet[0]>>6!=2:
             return
         leg=self.legs.get(side)
         if leg is None or src!=(leg.remote.host,leg.remote.port):
             return
         # RTP CSRC count, extension and padding are validated, rather than
         # interpreting arbitrary trailing bytes as speech samples.
-        if packet[1]&0x7f != self.codec:
+        payload_type=packet[1]&0x7f
+        if not (self.ivr_active or payload_type==self.codec):
             return
         n=12+4*(packet[0]&15)
         if n>len(packet): return
@@ -127,20 +217,44 @@ class RtpRelay:
             stop-=pad
         payload=packet[n:stop]
         if not payload:return
+        if self.ivr_active:
+            if side=='trunk' and payload_type==self.dtmf_payload:
+                self._ivr_digit(payload,packet)
+            return  # IVR media is local; never forward to an unconnected phone
+        if payload_type!=self.codec:return
+        if self.held:
+            return  # prevent both RTP directions reaching the other party/recorder/observer
         other='phone' if side=='trunk' else 'trunk'
         target=self.legs.get(other)
         if not target:return
         target.transport.sendto(packet,(target.remote.host,target.remote.port))
         self.packet_counts[side]+=1
-        if side in self._writers:
-            table=_MULAW_PCM if self.codec==0 else _ALAW_PCM
-            self._writers[side].writeframesraw(b''.join(table[c] for c in payload))
+        if self.on_audio is not None:
+            try:
+                self.on_audio(side, payload, self.codec)
+            except Exception:
+                self.on_audio = None  # fail closed without interrupting the live call
+        if self._recorder is not None:
+            timestamp=int.from_bytes(packet[4:8], 'big')
+            self._recorder.add(side,timestamp,payload,self.codec)
+            if self._recorder.truncated:
+                self.recording_truncated.add('conversation')
 
     def close(self):
+        self.held=False
+        if self._hold_task:
+            self._hold_task.cancel()
+            self._hold_task=None
+        self.on_audio = None
+        self.stop_ivr()
         self.enabled=False
-        for writer in self._writers.values():
-            writer.close()
-        self._writers.clear()
+        if self._recorder is not None:
+            path=self._recorder.close()
+            if self._recorder.truncated:
+                self.recording_truncated.add('conversation')
+            if path is not None:
+                self.recorded_paths={'conversation':path}
+            self._recorder=None
         for leg in self.legs.values():
             leg.transport.close()
         self.legs.clear()

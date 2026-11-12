@@ -3,17 +3,18 @@ import datetime as dt
 import hmac
 import io
 import random
+import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from .config import config, validate_config
+from .config import APP_VERSION, config, validate_config
 from .db import connection, init_db
-from .models import AgentIn, AgentStatusIn, EngineEvent, EngineHeartbeat, Login, QueueIn
+from .audit import audit
+from .models import AgentIn, AgentStatusIn, NativeCallControlIn, EngineEvent, EngineHeartbeat, Login, QueueIn
 from .security import encode_token, require_admin, require_engine_event, require_supervisor
 from .service import create_agent, create_queue, dashboard, ingest, seed_demo
 from .contact_center import router as contact_center_router
@@ -24,7 +25,7 @@ async def lifespan(app: FastAPI):
     init_db()
     yield
 
-app = FastAPI(title='QueuePilot Independent Contact Center', version='0.7.0-cleanup', lifespan=lifespan,
+app = FastAPI(title='QueuePilot Independent Contact Center', version=APP_VERSION, lifespan=lifespan,
               description='Independent QueuePilot SIP/ACD laboratory architecture; no AES/WTI management APIs. Not production-ready.')
 app.include_router(contact_center_router)
 static_root = Path(__file__).parent / 'static'
@@ -36,7 +37,7 @@ def index():
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.7.0-cleanup'}
+    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': APP_VERSION}
 
 # Single administrator for development/MVP. Use enterprise SSO and proper RBAC in production.
 login_attempts = {}
@@ -69,13 +70,14 @@ def add_queue(q: QueueIn, _=Depends(require_admin)):
     return {'id': qid}
 
 @app.put('/api/queues/{qid}')
-def edit_queue(qid: str, q: QueueIn, _=Depends(require_admin)):
+def edit_queue(qid: str, q: QueueIn, actor=Depends(require_admin)):
     with connection() as db:
         cursor = db.execute('''UPDATE queues SET name=?,skill=?,sla_seconds=?,target_percent=?,enabled=? WHERE id=?''',
                             (q.name, q.skill, q.sla_seconds, q.target_percent, int(q.enabled), qid))
         if cursor.rowcount != 1:
             raise HTTPException(404, 'Queue not found')
-    return {'id': qid, 'updated': True}
+        audit(db,actor,'queue.configuration.updated',qid,f'enabled={q.enabled};skill={q.skill}')
+    return {'id': qid, 'updated': True, 'scope':'native_lab_runtime_when_local_events_enabled'}
 
 @app.post('/api/agents', status_code=201)
 def add_agent(agent: AgentIn, _=Depends(require_admin)):
@@ -83,14 +85,65 @@ def add_agent(agent: AgentIn, _=Depends(require_admin)):
     return {'id': aid}
 
 @app.patch('/api/agents/{aid}/status')
-def edit_status(aid: str, status: AgentStatusIn, _=Depends(require_admin)):
-    # Dashboard directory only. Native SIP agent state synchronization is not yet wired.
+def edit_status(aid: str, status: AgentStatusIn, actor=Depends(require_admin)):
     with connection() as db:
-        cursor = db.execute('UPDATE agents SET status=?,last_change=? WHERE id=?',
-                            (status.status, time.time(), aid))
-        if cursor.rowcount != 1:
+        if not db.execute('SELECT 1 FROM agents WHERE id=?', (aid,)).fetchone():
             raise HTTPException(404, 'Agent not found')
-    return {'id': aid, 'updated': True, 'scope': 'directory_only_not_sip_runtime'}
+        managed = db.execute('SELECT 1 FROM native_agent_bindings WHERE agent_id=?', (aid,)).fetchone()
+        if managed:
+            states = {'available':'ready', 'away':'aux', 'offline':'offline'}
+            if status.status not in states:
+                raise HTTPException(422, 'Busy and ACW are controlled by actual call events, not an admin command')
+            db.execute('''INSERT INTO native_agent_commands(agent_id,desired_state,revision,state,requested_at)
+                          VALUES(?,?,1,'pending',?)
+                          ON CONFLICT(agent_id) DO UPDATE SET
+                          desired_state=excluded.desired_state,
+                          revision=native_agent_commands.revision+1,
+                          state='pending',requested_at=excluded.requested_at''',
+                       (aid,states[status.status],time.time()))
+            revision=db.execute('SELECT revision FROM native_agent_commands WHERE agent_id=?', (aid,)).fetchone()[0]
+            audit(db,actor,'native_agent.status_requested',aid,f'desired={states[status.status]};revision={revision}')
+            return {'id':aid,'updated':True,'scope':'pending_native_runtime','revision':revision}
+        # Agents outside the configured SIP runtime remain directory-only.
+        db.execute('UPDATE agents SET status=?,last_change=? WHERE id=?', (status.status,time.time(),aid))
+        audit(db,actor,'directory_agent.status_updated',aid,f'status={status.status}')
+        return {'id':aid,'updated':True,'scope':'directory_only_unmapped'}
+
+@app.post('/api/engine/calls/{call_id}/control', status_code=202)
+def request_call_control(call_id: str, body: NativeCallControlIn, actor=Depends(require_admin)):
+    # This only queues an intent. Never claim the telephone has been held until
+    # the native SIP runtime acknowledges the command under its own lock.
+    if config.demo_mode:
+        raise HTTPException(403,'Live call controls are unavailable in demo mode')
+    if not call_id or len(call_id)>160:
+        raise HTTPException(422,'Invalid call ID')
+    command_id='ctl_'+uuid.uuid4().hex
+    with connection() as db:
+        call=db.execute("SELECT id,status,external_id FROM calls WHERE id=? AND source='queuepilot-native'",(call_id,)).fetchone()
+        if not call:
+            raise HTTPException(404,'Native call not found')
+        if call['status']!='answered':
+            raise HTTPException(409,'Only an answered native call can be held or resumed')
+        # An engine heartbeat does not prove an active call, but prevents obviously
+        # stale commands accumulating while the standalone native runtime is down.
+        heartbeat=db.execute("SELECT engine_healthy,last_heartbeat FROM engine_heartbeats WHERE source='queuepilot-native'").fetchone()
+        if not heartbeat or not heartbeat['engine_healthy'] or time.time()-heartbeat['last_heartbeat']>30:
+            raise HTTPException(503,'Native runtime is not reporting healthy')
+        try:
+            db.execute("""INSERT INTO native_call_controls(id,call_id,action,actor,state,requested_at)
+                          VALUES(?,?,?,?, 'pending',?)""",
+                       (command_id,call['external_id'],body.action,actor,time.time()))
+        except sqlite3.IntegrityError:
+            raise HTTPException(409,'Another call-control command is pending') from None
+        audit(db,actor,'native_call.control_requested',call['external_id'],f'action={body.action};command={command_id}')
+    return {'id':command_id,'state':'pending','action':body.action}
+
+@app.get('/api/engine/calls/controls')
+def list_call_controls(_=Depends(require_admin)):
+    with connection() as db:
+        rows=[dict(row) for row in db.execute("""SELECT id,call_id,action,state,requested_at,processed_at,result
+                                FROM native_call_controls ORDER BY requested_at DESC LIMIT 100""")]
+    return {'commands':rows}
 
 @app.post('/api/engine/events')
 def receive_event(event: EngineEvent, _=Depends(require_engine_event)):

@@ -135,6 +135,7 @@ class MediaAddress:
     host: str
     port: int
     codec: int
+    dtmf_payload: int | None = None
 
 
 def parse_sdp(body: bytes, trusted_media_networks: tuple[str,...]) -> MediaAddress:
@@ -145,9 +146,14 @@ def parse_sdp(body: bytes, trusted_media_networks: tuple[str,...]) -> MediaAddre
     host = None
     port = None
     formats = []
+    rtpmap = {}
     for line in lines:
         if line.startswith('c=IN IP4 '):
             host=line[9:].strip().split('/')[0]
+        elif line.startswith('a=rtpmap:'):
+            match = re.fullmatch(r"a=rtpmap:(\d{1,3})\s+([A-Za-z0-9_-]+)/8000", line, re.I)
+            if match:
+                rtpmap[int(match.group(1))] = match.group(2).lower()
         elif line.startswith('m=audio '):
             parts=line.split()
             if len(parts) < 4 or parts[2] != 'RTP/AVP':
@@ -168,15 +174,22 @@ def parse_sdp(body: bytes, trusted_media_networks: tuple[str,...]) -> MediaAddre
     available=[n for n in (0,8) if n in formats]
     if not available:
         raise SipError('Only G.711 PCMU or PCMA supported in lab')
-    return MediaAddress(host,port,available[0])
+    event_pts=[pt for pt in formats if 96 <= pt <= 127 and rtpmap.get(pt) == 'telephone-event']
+    if len(event_pts)>1:
+        raise SipError('Multiple telephone-event payload types unsupported')
+    return MediaAddress(host,port,available[0], event_pts[0] if event_pts else None)
 
 
-def sdp_offer(host:str, port:int, codecs:tuple[int,...]=(0,8)) -> bytes:
+def sdp_offer(host:str, port:int, codecs:tuple[int,...]=(0,8), *, dtmf_payload:int|None=None) -> bytes:
     if not codecs or any(c not in (0,8) for c in codecs):
         raise SipError('Unsupported codec')
+    if dtmf_payload is not None and not 96 <= dtmf_payload <= 127:
+        raise SipError('Invalid telephone-event payload type')
     attrs = ['a=rtpmap:0 PCMU/8000','a=rtpmap:8 PCMA/8000']
-    lines=['v=0',f'o=queuepilot 1 1 IN IP4 {host}','s=QueuePilot','t=0 0',f'c=IN IP4 {host}',f'm=audio {port} RTP/AVP '+ ' '.join(map(str,codecs)),'a=sendrecv']
+    lines=['v=0',f'o=queuepilot 1 1 IN IP4 {host}','s=QueuePilot','t=0 0',f'c=IN IP4 {host}',f'm=audio {port} RTP/AVP '+ ' '.join(map(str,codecs+(dtmf_payload,) if dtmf_payload is not None else codecs)),'a=sendrecv']
     lines.extend(x for x in attrs if int(x.split(':',1)[1].split()[0]) in codecs)
+    if dtmf_payload is not None:
+        lines += [f'a=rtpmap:{dtmf_payload} telephone-event/8000', f'a=fmtp:{dtmf_payload} 0-15']
     return ('\r\n'.join(lines)+'\r\n').encode('ascii')
 
 

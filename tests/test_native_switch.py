@@ -11,7 +11,8 @@ import pytest
 from telephony.native_sip import IngressRoute
 from telephony.native_switch import Config, NativeSwitch
 from telephony.sip_stack import RegistrarAuth, SipError, MediaAddress, parse_message, parse_sdp, packet, response, sdp_offer
-from telephony.rtp_media import RtpRelay, decode_ulaw, decode_alaw
+from telephony.rtp_media import RtpRelay
+from telephony.stereo_recording import decode_ulaw, decode_alaw
 
 
 def request(method,uri,call_id,cseq,from_header,to_header,additional=None,body=b''):
@@ -40,7 +41,7 @@ async def receive(loop,s,timeout=1.5):
     return parse_message(data)
 
 
-async def exercise(tmp_path):
+async def exercise(tmp_path,event_writer=None):
     loop=asyncio.get_running_loop()
     free=udp_socket()
     port=free.getsockname()[1]
@@ -48,7 +49,7 @@ async def exercise(tmp_path):
     server=NativeSwitch(Config('127.0.0.1',port,'127.0.0.1',('127.0.0.1/32',),('127.0.0.1/32',),('127.0.0.1/32',),
                                (IngressRoute('6000','support',frozenset({'english'})),),
                                {'agent1':('1001',frozenset({'english'}))},{'1001':'long-personal-password'},
-                               'queuepilot.local',b'0123456789abcdef0123456789abcdef',record_directory=tmp_path))
+                               'queuepilot.local',b'0123456789abcdef0123456789abcdef',record_directory=tmp_path,recording_notice_confirmed=True),event_writer=event_writer)
     phone=udp_socket();trunk=udp_socket();phone_media=udp_socket();trunk_media=udp_socket()
     await server.start()
     try:
@@ -125,11 +126,20 @@ async def exercise(tmp_path):
         assert server.acd.calls['customer-1'].state=='completed'
         assert 'customer-1' not in server.calls
         assert [e['event'] for e in server.events]==['call.queued','call.offered','call.answered','call.bridged','call.completed']
-        with wave.open(str(tmp_path/'customer-1-trunk.wav'),'rb') as w:
-            assert w.getframerate()==8000
-            assert w.getnframes()==160
-        with wave.open(str(tmp_path/'customer-1-phone.wav'),'rb') as w:
-            assert w.getnframes()==160
+        paths=list(tmp_path.glob('customer-1-*-conversation.wav'))
+        if event_writer is None:
+            assert len(paths)==1, 'Each call must create exactly one audio file'
+            assert not list(tmp_path.glob('customer-1-*-trunk.wav'))
+            assert not list(tmp_path.glob('customer-1-*-phone.wav'))
+            with wave.open(str(paths[0]),'rb') as w:
+                assert w.getnchannels()==2
+                assert w.getsampwidth()==2
+                assert w.getframerate()==8000
+                assert w.getnframes()>=160
+                assert len(w.readframes(w.getnframes()))==w.getnframes()*4
+        else:
+            # After durable archival, only the protected library copy remains.
+            assert paths==[]
     finally:
         await server.stop()
         for sock in (phone,trunk,phone_media,trunk_media):sock.close()

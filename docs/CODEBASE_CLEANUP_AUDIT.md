@@ -1,3 +1,44 @@
+# QueuePilot v1.2 — Codebase and Architecture Audit
+
+Reviewed 12 November 2026 against QueuePilot v1.1 on PR #2. Only the native QueuePilot SIP/RTP + ACD + IVR + management stack is retained. No physical Avaya PBX, handset, or customer call was tested. This is a laboratory-only development release.
+
+## Confirmed cleanup
+
+- Removed orphan imports of FastAPI Response and Pydantic BaseModel in app/main.py, StreamingResponse in app/contact_center.py, and unused codec decoder re-exports in telephony/rtp_media.py. The dependent test now imports decoders from the canonical stereo_recording module.
+- Removed pytest from production runtime requirements; requirements-dev.txt is used by GitHub Actions. Kept httpx because the native supervisor monitoring worker actively uses it.
+- Replaced stale API 0.9.0-lab version reporting with a shared 1.2.0-lab version constant.
+- Corrected misleading recording, live-listening, and engine-integration notices in the dashboard: single stereo WAV and authorized RTP listening are integrated in the isolated lab with explicit opt-in, not production-certified.
+- Added repository hygiene tests for absent legacy modules, matching static HTML IDs, proper development/runtime dependency separation and consistent app version.
+- A code/tree scan found no additional unrelated standalone source file safe to delete. FastAPI route handlers and SIP callbacks are dynamically referenced; static grep-only deletion would break actual functionality.
+- No runtime data, SQLite tables, credentials, actual recordings, existing audit history or real configuration were deleted.
+
+## Architecture retained
+
+Caller -> Avaya Aura SIP handoff -> QueuePilot native SIP B2BUA -> local IVR/ACD -> registered SIP-capable phone. Audio remains anchored in QueuePilot RTP. Optional single 8 kHz stereo WAV has caller on the left and agent on the right. Authorized monitoring taps RTP but does not create a second recording. Dashboard and telephony are two processes in one project; not third-party PBXs.
+
+## Test evidence
+
+- Baseline: 52 tests passing before cleanup. New local suite: 56 tests passing, Python compilation passing, and JavaScript syntax validation passing.
+- Baseline coverage: 80% across Python source; native_switch.py was 64%, so important failure paths remain untested.
+- The Dockerfile intentionally packages only the management web service, not a production SIP switch.
+
+## Risks still open — do not use for real customer traffic
+
+1. CRITICAL: incomplete RFC 3261 SIP transaction/retransmission handling, no production TLS/SRTP/RTCP, failover, jitter controls or real Avaya handset interoperability.
+2. CRITICAL: ACD and registration state remain in memory; there is no durable distributed recovery after a crash.
+3. HIGH: no production SSO/RBAC, advanced throttling, consent/recording governance or security certification.
+4. HIGH: the dashboard IVR graph editor does not publish menus to the native JSON IVR runtime; manually edited dashboard agent states do not control SIP presence.
+5. HIGH: --local-events uses same-host SQLite, not a replayable production message bus. Reports can diverge after crashes.
+6. HIGH: real-world RTP recording duration, network loss and recovery have not been validated. Native one-WAV archival has a 64 MiB size limit; the separate external recording-import API has a 32 MiB limit.
+7. Deployment must validate actual Avaya IP phone model, SIP firmware, independent registration support, trunk routing and negotiated codecs.
+
+## Preservation
+
+Source cleanup is not data deletion. Historical tables including aura_audit are kept to protect older records; do not drop them without a backup and an explicitly approved migration. Capture files, passwords, .env and .local.json are excluded from the shipped source archive.
+
+---
+
+## Historical audit — v0.7
 # QueuePilot v0.7 — Architecture and legacy cleanup audit
 
 Date: 2026-11-11. Scope: source tree, application routes, SIP/media/ACD modules, dashboard, SQLite schema, tests and deployment documentation. **No production Avaya or IP handset was contacted.**
@@ -60,3 +101,8 @@ Source deletions do **not** mean customer-data deletion. Historical `aura_*` tab
 - 31 local tests passed at cleanup review, later tests may increase.
 - Python compilation and JavaScript syntax validation required.
 - No claim of real Avaya telephone interop, recording playback from native RTP, voice IVR, or production readiness.
+
+
+## v1.3 follow-up
+
+Added lab-only native Dashboard command synchronization and a persisted SQLite event outbox; see [runtime sync guide](NATIVE_RUNTIME_SYNC_LAB.md). The full SIP/RTP production, HA, safe crash recovery and real Avaya handset interoperability risks **remain open**.

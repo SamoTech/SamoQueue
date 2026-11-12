@@ -1,6 +1,29 @@
 # QueuePilot — Independent Contact Center Platform
 
-**الإصدار الحالي: v0.7 (Native SIP Laboratory Foundation) — مرحلة تطوير واختبار، غير جاهز للإنتاج.**
+**الإصدار الحالي: v1.4 (Native SIP + Voice IVR + Single WAV + Live Listen + Supervisor Media Hold Lab) — مرحلة تطوير واختبار، غير جاهز للإنتاج.**
+
+## v1.4 — Hold / Resume من لوحة المشرف (تجربة معملية)
+
+- أُضيف **Server-side Hold/Resume** للمكالمات المتصلة: المشرف يرسل أمرًا معتمدًا من لوحة التحكم، ويُحفظ Pending في `native_call_controls` حتى يطبقه محرك SIP على نفس المضيف تحت قفل التشغيل.
+- عند Hold، يوقف QueuePilot تمرير RTP بين الطرفين ويصدر **صمت G.711** إلى العميل (ليس Music on Hold). وعند Resume يعود نقل الصوت دون إنشاء جلسة أو تسجيل جديد.
+- كل مكالمة تظل في **ملف WAV ستيريو واحد**، حتى لو استخدم المشرف Hold عدة مرات. لا يوجد ملف تسجيل منفصل للـHold.
+- يمنع API الأوامر المكررة أو غير المصرح بها؛ الأوامر القديمة أو الموجهة لمكالمات منتهية تُرفض، وكل طلب ونتيجة موثّق في Audit Log. Dashboard يوضح Pending/Applied/Rejected.
+- **تنبيه:** دعم زر Hold الموجود على التليفون عبر SIP re-INVITE، وMusic on Hold، والتحويل Transfer لم يكتمل بعد. لم يتم اختبار هذه النسخة على Avaya فعلية أو تأمينها للإنتاج.
+
+دليل إعداد وحدود الميزة: [`docs/NATIVE_HOLD_LAB.md`](docs/NATIVE_HOLD_LAB.md).
+
+## v1.3 — ربط Dashboard بمحرك Native SIP/ACD (معمل فقط)
+
+- تعديلات حالة الموظف المرتبط فعليًا بمحرك QueuePilot (`available / away / offline`) تُحفظ الآن كأوامر **مراجَعة وآمنة** في قاعدة البيانات. حالة `busy` و`ACW` تأتي من المكالمة نفسها، وليست أمرًا إداريًا.
+- يقرأ المحرك الأوامر تلقائيًا أثناء دورة التشغيل، ويطبّقها على الـACD **إذا لم يكن الموظف في عرض مكالمة أو مكالمة فعلية أو ACW**. تظهر حالة `pending / deferred / applied` في لوحة الموظفين، وتُسجّل طلبات الإدارة في Audit Log. **لا يتم قطع المكالمة لتطبيق أمر**.
+- يُظهر الـDashboard حالة الموظف الفعلية المتاحة من المحرك. حتى لو كان الـACD في وضع Ready، لا يُعتبر الموظف متاحًا من دون SIP REGISTER صالح.
+- تغييرات `enabled` و`skill` للكيوهات تنتقل أثناء التشغيل إلى المحرك المحلي عند تفعيل `--local-events`؛ تعطيل الكيو يمنع **المكالمات الجديدة**، ولا ينهي المكالمات المستقبلة مسبقًا. المهارات المعرّفة في Dashboard تحل محل skills في ملف المسارات للمكالمات الجديدة. يجب مطابقة مهارات الموظفين في ملف SIP المحلي.
+- أُضيف `native_event_outbox` لتسجيل أحداث دورة المكالمة محليًا **قبل** محاولة إدخالها في تقارير Dashboard. عند فشل مؤقت، تبقى أحداث المكالمة غير المسلَّمة في SQLite ويُعاد إرسالها بترتيبها عند استعادة الاتصال بقاعدة البيانات أو إعادة تشغيل العملية.
+- هذه آلية **إعادة تسليم محلية محدودة** وليست HA، ولا تستطيع استعادة مكالمة RTP مفقودة أو حدث لم يُكتب على القرص أصلًا. لا تدعم تعدد محركات SIP المتزامنة على نفس قاعدة البيانات ولا تضمن تمامًا تسلسل الوسائط بعد انهيار العملية.
+- تسجيل كل مكالمة يبقى **ملف WAV ستيريو واحدًا**. محرك IVR وLive Listening المعمليان محفوظان دون تغيير.
+
+التفاصيل والاختبارات والقيود في [`docs/NATIVE_RUNTIME_SYNC_LAB.md`](docs/NATIVE_RUNTIME_SYNC_LAB.md). لا تستخدم الإصدار على خطوط العملاء.
+
 
 > **الرؤية الأساسية:** Avaya Aura/Communication Manager تستقبل المكالمات من شبكة الاتصالات وتُسلّمها إلى QueuePilot عبر **SIP Trunk** فقط. بعد التسليم، **QueuePilot هو المسؤول الوحيد عن منطق مركز الاتصال**: استقبال جلسات SIP، الـIVR، اختيار الـQueue، توزيع المكالمات (ACD)، الاتصال بتليفونات الموظفين، مرور الصوت (RTP)، التسجيل، متابعة المشرفين والتقارير.
 >
@@ -13,7 +36,7 @@
 | Avaya Aura — قبل تسليم المكالمة | QueuePilot — بعد التسليم |
 |---|---|
 | استقبال المكالمة من PSTN / خطوط الشركة | استقبال `INVITE` على SIP listener مستقل |
-| اختيار SIP route المخصص لتسليم المكالمة | تحديد القسم من DID ثم IVR/Business Rules (الـIVR الصوتي مخطط له) |
+| اختيار SIP route المخصص لتسليم المكالمة | تحديد القسم من DID ثم IVR صوتي محلي واختيارات DTMF أو تحويل مباشر للطابور |
 | تسليم SIP signaling والصوت وفق إعدادات الـTrunk | إنشاء Queue، تشغيل ACD، اختيار الموظف، إرسال `INVITE` إلى تليفونه |
 | توفير مسار احتياطي عند تعطل QueuePilot حسب تصميم الشبكة | تمرير RTP عبر QueuePilot، تشغيل التسجيل والمراقبة عند اكتمال تطويرهما |
 | **لا تدير موظفي QueuePilot أو مهاراتهم أو التسجيلات أو التقارير** | إدارة بيانات المكالمات والموظفين والصلاحيات والتقارير من داخل المنصة |
@@ -28,7 +51,7 @@ flowchart TD
     Aura -->|SIP INVITE + SDP / RTP handoff| Ingress[QueuePilot Native SIP Ingress]
     subgraph QP[QueuePilot - نظام مستقل]
         Ingress --> Call[Native SIP B2BUA / Call Controller]
-        Call --> IVR[IVR / DTMF / Business Hours - مستهدف]
+        Call --> IVR[IVR صوتي / RFC4733 DTMF (معملي) / Business Hours مستهدف]
         IVR --> Queue[ACD / Skills / Priority / Queues]
         Queue --> Registrar[SIP Registrar / Agent Location]
         Call <--> Media[RTP Media Anchor / Recording / Monitor]
@@ -49,11 +72,11 @@ flowchart TD
 
 1. **وصول المكالمة:** العميل يتصل برقم الشركة؛ Avaya تستقبلها وتوجهها إلى عنوان QueuePilot المسموح به عبر SIP Trunk، مع رقم المتصل والرقم المطلوب (DID) حسب إعدادات التسليم.
 2. **التحقق:** QueuePilot يتحقق من عنوان مصدر الـSIP والرسالة والـSDP وسياسات الدخول. في النسخة المعملية توجد قوائم سماح للمصادر؛ مصادقة الإنتاج عبر النقل الآمن والمواصفات الكاملة ما زالت مطلوبة.
-3. **تحديد الخدمة:** يربط DID بالـQueue (متاح معمليًا). **الهدف القادم** تنفيذ IVR صوتي حقيقي يدعم الرسائل والقوائم وأزرار DTMF ومواعيد العمل والتحويل بين الأقسام.
+3. **تحديد الخدمة:** يربط DID بالـQueue (متاح معمليًا). يمكن اختيار Queue مباشرة من DID أو تشغيل رسالة WAV صوتية (8kHz PCM16) واستقبال DTMF برقم واحد عبر RFC4733 ثم توجيه المكالمة للـQueue المناسبة **معمليًا**؛ مواعيد العمل والقوائم المتعددة والتكامل مع محرر IVR لم تكتمل.
 4. **الدخول للطابور:** ACD يسجّل المكالمة ويبحث عن موظف جاهز تتطابق مهاراته مع متطلبات المكالمة، مع مراعاة الأولوية وأطول مدة توافر؛ وإذا لم يرد الموظف يجرّب غيره حسب السياسة.
 5. **الاتصال بالموظف:** QueuePilot يحدد مكان تليفون SIP المسجل لديه ويُرسل له `INVITE` مباشرة. **التسجيل والاتصال مجرّبان في بيئة SIP محاكاة فقط**.
 6. **الرد ونقل الصوت:** بعد قبول الموظف، يربط QueuePilot طرفَي المكالمة ويمرّر G.711 RTP عبر محرك الصوت الداخلي. **ده مُختبَر معمليًا، وليس على Avaya فعلية**.
-7. **التسجيل والمراقبة:** في التصميم النهائي يتم التسجيل والاستماع بإذن وصلاحيات وتدقيق، مع احتفاظ QueuePilot بالوسائط. الموجود حاليًا: تسجيل WAV تشخيصي اختياري لكل طرف (مغلق افتراضيًا)، ومكتبة لاستيراد التسجيلات وواجهة طلبات المراقبة، **دون دمج مباشر مع RTP الحقيقي**.
+7. **التسجيل والمراقبة:** في المعمل يمكن إنشاء **ملف WAV ستيريو واحد فقط لكل مكالمة** بعد الرد (العميل يسار والموظف يمين) وربطه بمكتبة المشرف. يمكن أيضًا تشغيل **استماع مباشر مصرّح به** من نفس مسار RTP بعد طلب مدير وموافقة حساب مراجعة مستقل؛ التسجيل والمراقبة مغلقان افتراضيًا. هذا لا يعني جاهزية استخدام الوسائط الصوتية في الإنتاج.
 8. **الإغلاق والتقارير:** تُحدَّث حالة المكالمة والموظف (ومنها After-Call Work) وتُسجَّل الأحداث. التكامل المحلي الاختياري يكتب أحداث دورة المكالمة في قاعدة البيانات لعرضها بالداشبورد؛ **الاستمرارية وإعادة تشغيل الأحداث المفقودة غير مكتملتين**.
 
 ### مثال توضيحي
@@ -72,21 +95,23 @@ flowchart TD
 
 ## 4. الوظائف: المنفّذ حاليًا مقابل الهدف
 
-| الوظيفة | الحالة في v0.7 | ما ينقص للإنتاج |
+| الوظيفة | الحالة في v1.4 | ما ينقص للإنتاج |
 |---|---|---|
 | SIP REGISTER / مصادقة التليفون | ✅ اختبار محلي: Digest SHA-256 + nonce | توافق التليفونات الفعلية، TLS، تهيئة ومراقبة الأجهزة |
 | استقبال SIP من مصدر مسموح + DID mapping | ✅ اختبار معملي | تكامل Avaya Trunk الحقيقي وتوافق SIP/SDP |
 | ACD Skills / Priority / Longest Idle / retry / ACW | ✅ قواعد واختبارات محلية | حالة دائمة، مزامنة الموظفين ومعالجة إعادة التشغيل |
 | اتصال الموظف SIP ثنائي الطرف (INVITE/ACK/BYE/CANCEL) | ✅ نطاق معملي محدود | معاملات SIP كاملة، timers/retransmissions، transfer/hold/re-INVITE |
-| نقل الصوت G.711 RTP في الاتجاهين | ✅ اختبار محلي | SRTP/RTCP/jitter/DTMF/codec interoperability ومراقبة الجودة |
+| نقل الصوت G.711 RTP في الاتجاهين | ✅ اختبار محلي + صوت رسالة IVR وRFC4733 | SRTP/RTCP/jitter/codec interoperability ومراقبة الجودة |
 | Dashboard / إدارة Queues وAgents | ✅ واجهة وAPI محليًا | صلاحيات مؤسسية، مزامنة حية كاملة، نشر آمن |
 | حفظ أحداث Native SIP في قاعدة البيانات | 🟡 اختياري بـ`--local-events` | Event journal دائم وإعادة إرسال ومطابقة CDR |
-| IVR Flow Editor / إنشاء مسودات | 🟡 موجود | تشغيل prompts وDTMF وBusiness Hours فعليًا داخل محرك الصوت |
-| Recording Library: استيراد/بحث/تشغيل | 🟡 موجودة للتسجيلات المستوردة | تسجيل المكالمات الحقيقي، ربط RTP، retention، consent |
-| Diagnostic WAV لكل طرف | 🟡 خيار Lab معطّل افتراضيًا | سياسات الخصوصية وحماية الملفات وربط المكتبة |
-| Live Listen / Approval / Browser Audio Gateway | 🟡 API وWorkflow فقط | ربط RTP mixer/observer حي وآمن بالمكالمة |
+| IVR Flow Editor / إنشاء مسودات | 🟡 موجودة، منفصلة عن التشغيل | ربط المسودات المعتمدة بالمحرك وإدارة الإصدارات |
+| Voice IVR RTP + RFC4733 DTMF + queue choice | ✅ معمل: WAV محلي، رد SIP مبكر، اختيار رقم، إعادة المحاولة/الـFallback | قوائم متداخلة وTTS ومواعيد العمل، Avaya interop وTLS/SRTP |
+| Recording Library: استيراد/بحث/تشغيل | 🟡 استيراد وتسجيل تلقائي معملي اختياري من Native RTP بعد انتهاء المكالمة | استكمال التخزين الآمن والتشفير والاحتفاظ واختبار Avaya |
+| Single Call WAV | ✅ Lab: ملف واحد ستيريو (العميل يسار/الموظف يمين)، وربطه بالمكتبة بعد انتهاء المكالمة | دقة التوقيت/جودة الإنتاج، والموافقة والتوافق مع أجهزة Avaya |
+| Live Listen / Approval / Browser Audio Gateway | ✅ اختبار معملي: طلب Admin، موافقة Reviewer مستقلة، tap من RTP، بث PCM للمتصفح، إيقاف مُدقّق ومقيد | TLS/SRTP وRBAC وHA وAvaya interop واختبارات تشريعية/أمنية |
 | Whisper / Barge / Conference | ❌ مخطط | Mix/Inject Media وSIP Conference Controller |
-| Hold / Transfer / Music on Hold | ❌ غير مكتمل | تطوير كامل وإجراء اختبارات تداخل المكالمات |
+| Supervisor Hold / Resume من Dashboard | ✅ تجربة RTP محلية، بدون SIP re-INVITE | اختبار Avaya فعلي، Music on Hold، SRTP وSSRC/RTCP |
+| Phone Hold / Transfer / Music on Hold | ❌ غير مكتمل | SIP re-INVITE/REFER، تحويل داخلي، نغمة انتظار وإجراءات السلامة |
 | Reports / CSV / JSON / ZIP | 🟡 10 مجموعات بيانات | اكتمال الأحداث، مقاييس الإنتاج، استرجاع الأعطال وموثوقية الأرقام |
 | High Availability / Failover / PostgreSQL / SSO | ❌ غير منفذ | تنفيذ واعتماد تشغيلي |
 
@@ -103,7 +128,7 @@ flowchart TD
 | `agents` | أداء الموظفين ومؤشرات الرد |
 | `intervals` | تقسيمات زمنية نصف ساعة |
 | `sla` | مستوى الخدمة المحسوب من الأحداث المسجلة |
-| `recordings` | البيانات الوصفية للتسجيلات المستوردة |
+| `recordings` | بيانات التسجيلات المستوردة والتسجيلات المعملية المستقلة بصيغة WAV ستيريو للمكالمة الواحدة |
 | `monitoring` | طلبات/حالات المراقبة وتدقيقها |
 | `ivr` | بيانات مسودات وتعديلات تدفقات IVR |
 | `audit` | سجل العمليات الإدارية |
@@ -125,12 +150,15 @@ flowchart TD
 │   ├── audit.py, security.py, config.py, models.py
 │   └── static/                 # Web dashboard (HTML, CSS, JS)
 ├── telephony/
-│   ├── native_switch.py        # Embedded SIP call controller; LAB ONLY
+│   ├── native_switch.py        # Embedded SIP call controller + native IVR; LAB ONLY
+│   ├── ivr.py                  # Local WAV validation and PCM16 -> G.711 encoding
 │   ├── sip_stack.py            # SIP message parsing/auth/SDP primitives
 │   ├── native_sip.py           # Ingress rules, phone directory, call planning
 │   ├── acd.py                  # Skills-based queue scheduling
-│   ├── rtp_media.py            # Embedded G.711 RTP relay and diagnostic audio
+│   ├── rtp_media.py            # Embedded G.711 RTP relay and native recorder hookup
+│   ├── stereo_recording.py     # One aligned two-channel WAV per call (lab)
 │   ├── local_events.py        # Optional direct local event writer into QueuePilot DB
+│   ├── recording_archive.py   # Consent-gated single stereo WAV archival into QueuePilot recording library
 │   └── native_switch.example.json
 ├── tests/                      # Backend, ACD, signaling/media and event tests
 ├── docs/
@@ -158,7 +186,7 @@ python -m venv .venv
 source .venv/bin/activate
 # Windows PowerShell:
 # .venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 python setup_demo.py
 python run.py
 ```
@@ -203,7 +231,7 @@ python -m compileall -q app telephony tests
 node --check app/static/app.js
 ```
 
-**التحقق الأخير لهذه الوثيقة:** 31 اختبار Python محلي ناجح على v0.7. لا يعني ذلك أن GitHub Actions نجح أو أن Avaya الحقيقية اختُبرت.
+**التحقق الأخير لهذه الوثيقة:** تمت مراجعة الكود وإعادة اختبارات Python وJavaScript في v1.2. لا يعني ذلك أن GitHub Actions نجح أو أن Avaya الحقيقية اختُبرت.
 
 ## 8. واجهات الـAPI الرئيسية
 
@@ -214,27 +242,42 @@ node --check app/static/app.js
 | `POST /api/queues`, `POST /api/agents` | إدارة بيانات الطوابير والموظفين |
 | `POST /api/engine/events`, `POST /api/engine/heartbeat` | أحداث/نبض محرك QueuePilot الداخلية، بمفتاح `X-Engine-Key` |
 | `/api/cc/recordings` | مكتبة التسجيلات المستوردة والبيانات الوصفية والتشغيل المصرّح |
-| `/api/cc/monitor` | موافقات المراقبة وبوابة بث معملية، غير متصلة بـRTP الحقيقي |
+| `/api/cc/monitor` | موافقات المراقبة وبوابة بث معملية، متصلة بـRTP في الوضع المعملي عند التشغيل الاختياري --local-monitor |
 | `/api/cc/ivr` | إدارة مسودات IVR؛ ليس محرك تشغيل IVR |
 | `/api/cc/reports` | قائمة تقارير JSON/CSV/ZIP والتصدير |
 
 توثيق FastAPI التفاعلي متاح محليًا على `/docs` لأغراض التطوير. لا تنشره على الإنترنت من دون حمايات مناسبة. واجهات Native Engine **داخلية**، وليست Avaya CTI APIs.
+
+
+## 8.1 تطوير v0.9 — تسجيل المكالمة بالكامل في ملف واحد (معمل فقط)
+
+تم استبدال تسجيل الاتجاهين في ملفين منفصلين بـ **ملف WAV ستيريو واحد لكل مكالمة**، يُنتجه محرك QueuePilot بنفسه أثناء مرور RTP عبره. **القناة اليسرى صوت العميل، واليمنى صوت الموظف**؛ عند التشغيل في المتصفح تسمع الطرفين من نفس الملف، وتبقى كل قناة قابلة للفحص بشكل مستقل. تعتمد المحاذاة على توقيت وصول أول حزمة من كل اتجاه مع طوابع RTP وحشو الصمت، بنطاق تأخير معمل 500 مللي ثانية. هذا **تقريب** وليس تزامنًا إنتاجيًا مضمونًا عبر شبكات مختلفة.
+
+التسجيل **مغلق افتراضيًا**، ولا يُفعّل إلا بمعمل معزول وبموافقة سياسة الإخطار والتسجيل:
+
+1. اضبط `RECORDINGS_ENABLED=true` و`RECORDING_DIR` في `.env` المحلي للوحة، مع حماية الملفات وتجنب رفع المفاتيح إلى GitHub.
+2. في `telephony/native_switch.local.json` اضبط `record_calls=true` و`recording_notice_confirmed=true`، واستخدم مجلد `record_directory` مختلفًا عن مجلد المكتبة. إقرار السياسة ليس إثباتًا أن المتصل تلقّى إخطارًا فعليًا.
+3. أنشئ الطوابير والموظفين بمعرّفات متوافقة وشغّل محرك SIP بـ`--lab --local-events` مع نفس قاعدة البيانات المحلية.
+4. عند إنهاء المكالمة، يُغلق ملف WAV الوحيد، وتُحفظ بياناته في مكتبة المشرف كسجل واحد من المصدر `queuepilot-native-conversation`. بعد نجاح الأرشفة يُحذف ملف الالتقاط المؤقت وتبقى نسخة واحدة في المكتبة. لو الأرشفة فشلت يُحتفظ بالمصدر لاسترداده يدويًا، ولا يُعرض كتسجيل مكتمل.
+5. يفتح المشرف الملف من `/api/cc/recordings/{id}/audio` بعد تسجيل الدخول، وتظهر بياناته في تقرير `recordings`، مع منع إنشاء سجل ثاني لنفس مكالمة Native.
+
+الحد المعملي 30 دقيقة للالتقاط، وحد الملف المؤرشف 64 MiB. تظل الملفات التاريخية المكوّنة من اتجاهين في الإصدارات السابقة **محفوظة بدون حذف أو تحويل تلقائي**. لم يُنفّذ بعد التشفير الكامل أو التسجيل الإنتاجي أو استعادة التسجيل بعد الأعطال. استماع RTP الحالي معملي فقط. راجع [توثيق التسجيل](docs/NATIVE_RECORDING_LAB.md).
 
 ## 9. الأمان والخصوصية ومبادئ الاستقلال
 
 1. **Network isolation:** ضع SIP/RTP والتليفونات على Voice VLAN وشبكات موثوقة مع Allowlist محدد؛ الوجود على نفس الشبكة لا يغني عن المصادقة.
 2. **Secrets:** كلمات مرور الموظفين، مفاتيح API، وملفات `.env` و`native_switch.local.json` لا تدخل Git مطلقًا.
 3. **SIP/Media protection:** UDP/G.711 المعملي ليس بديلًا عن TLS/SRTP، حماية المعاملات، مقاومة إساءة الاستخدام وحماية التسجيلات.
-4. **Recording:** يلزم سياسة حفظ وتشفير وصلاحيات وإشعار/موافقة مناسبة حسب القوانين المطبقة. التسجيل التشخيصي معطل افتراضيًا، والتسجيل الإنتاجي غير منفّذ.
-5. **Supervisor monitoring:** كل طلب استماع يحتاج هوية مستقلة وصلاحية محددة وموافقة وتدقيق وإيقاف مضمون؛ الاستماع/Whisper/Barge على المكالمات الحية لم يُوصل بعد.
-6. **Data safety:** لا تحذف قواعد البيانات أو التسجيلات القديمة أثناء الترقية؛ النسخة v0.7 تحتفظ بالجداول التاريخية وتنقل Audit القديم إلى سجل عام بدون إسقاط المصدر.
+4. **Recording:** يلزم سياسة حفظ وتشفير وصلاحيات وإشعار/موافقة مناسبة حسب القوانين المطبقة. التسجيل التشخيصي والأرشفة داخل المكتبة معطلان افتراضيًا، والتسجيل الإنتاجي غير منفّذ.
+5. **Supervisor monitoring:** كل طلب استماع يحتاج هوية مستقلة وصلاحية محددة وموافقة وتدقيق وإيقاف مضمون؛ تم ربط Live Listen معمليًا مع موافقة مستقلة، لكن Whisper/Barge غير منفذَين، كما لم تكتمل ضمانات الإيقاف/التعافي الإنتاجية.
+6. **Data safety:** لا تحذف قواعد البيانات أو التسجيلات القديمة أثناء الترقية؛ النسخة v0.9 تحتفظ بالجداول التاريخية وتنقل Audit القديم إلى سجل عام بدون إسقاط المصدر.
 7. **Production operations:** ما زال مطلوبًا RBAC/SSO، قاعدة بيانات إنتاجية، event journal، نسخ احتياطية، High Availability، مراقبة سعة RTP/SIP، واختبارات اختراق وتحمل.
 
 ## 10. خطة التنفيذ إلى نظام مستقل متكامل
 
 - **المرحلة A — نواة الاتصال:** استكمال SIP transactions/dialogs وSDP وTLS/SRTP والـDTMF واختبار التسجيل على موديلات Avaya SIP الحقيقية.
 - **المرحلة B — IVR/ACD:** تشغيل رسائل صوتية فعلية، Multi-level IVR، ساعات العمل، Queue Music، مهارات الموظفين، حالات AUX/Ready/ACW وHold/Transfer.
-- **المرحلة C — Media Operations:** إنتاج تسجيل تلقائي مرتبط بالمكالمة، ربط التسجيلات بالمكتبة، Live Listen وWhisper وBarge بصلاحيات وتدقيق قانوني.
+- **المرحلة C — Media Operations:** تعزيز التسجيل الواحد لكل مكالمة لبيئة الإنتاج، Live Listen وWhisper وBarge بصلاحيات وتدقيق قانوني.
 - **المرحلة D — Reports:** تخزين أحداث موثوق وقابل لإعادة التشغيل، سجلات CDR وAgent State دقيقة، مؤشرات SLA/ASA/AHT/Occupancy وصيغ تصدير إضافية عند تنفيذها.
 - **المرحلة E — Production Readiness:** PostgreSQL، SSO/RBAC، نسخ احتياطي، failover، اختبارات ضغط، استعادة بعد الأعطال، ومصفوفة توافق التليفونات وAvaya SIP Trunk.
 
@@ -250,7 +293,32 @@ node --check app/static/app.js
 ## 11. وثائق المشروع والحالة
 
 - [Native SIP architecture and technical requirements](docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md)
-- [Codebase cleanup audit / release risks](docs/CODEBASE_CLEANUP_AUDIT.md)
+- [Codebase cleanup audit / release risks — v1.2](docs/CODEBASE_CLEANUP_AUDIT.md)
 - [GitHub development repository](https://github.com/SamoTech/SamoQueue)
 
-**الخلاصة:** QueuePilot ليس إضافة على Avaya، بل نواة مركز اتصال مستقل. **دور Avaya يقتصر على تسليم مكالمات SIP الواردة**؛ لكن **النسخة الحالية v0.7 لا تزال أساسًا معمليًا**. التوثيق يفرق بين ما نجح محليًا وما نعمل للوصول إليه، حتى لا تُعرَّض مكالمات أو بيانات حقيقية للخطر.
+**الخلاصة:** QueuePilot ليس إضافة على Avaya، بل نواة مركز اتصال مستقل. **دور Avaya يقتصر على تسليم مكالمات SIP الواردة**؛ لكن **النسخة الحالية v1.2 لا تزال أساسًا معمليًا**. التوثيق يفرق بين ما نجح محليًا وما نعمل للوصول إليه، حتى لا تُعرَّض مكالمات أو بيانات حقيقية للخطر.
+
+
+## 10. Voice IVR الفعلي داخل QueuePilot — v1.0 (معملي)
+
+إذا تم تعريف `ivr_menus` في ملف `telephony/native_switch.local.json`، فإن QueuePilot نفسه يرد على المكالمة الواردة عبر SIP، ويشغّل ملف صوت WAV محليًا على RTP، ويستقبل مفتاح العميل من RFC4733 DTMF ويحدد الـQueue المناسبة، قبل الاتصال بتليفون الموظف. الاختيار متاح من الأرقام `0-9` و`*` و`#`، مع عدد محاولات ومهلة وQueue احتياطي اختياري.
+
+**إعداد سريع:** أضف `ivr_menus` لقائمة ملف الإعداد المحلي كما في [دليل Native IVR](docs/NATIVE_IVR_LAB.md)، وجهّز رسالة WAV mono PCM16 بمعدل 8000 Hz ومدتها لا تتجاوز 30 ثانية. محرك الـIVR لا يعتمد على Avaya IVR أو Asterisk.
+
+**القيود:** محرر IVR في الداشبورد لا ينشر القوائم إلى المحرك بعد؛ التحكم حاليًا يتم من JSON محلي خاص، والرسائل لا تُولَّد بالـTTS. يظل **تسجيل المكالمة ملف WAV واحدًا ستيريو** بعد اتصال الموظف (لا يشمل رسالة الـIVR)، مع شرط تفعيل سياسة التسجيل؛ ولا يُسمح باستخدام الإصدار على مكالمات العملاء حتى اجتياز اختبارات Avaya والأمان والاعتمادية.
+
+
+## 12. QueuePilot v1.1 — Live Listening من RTP الداخلي (معمل فقط)
+
+هذه المرحلة أضافت `telephony/live_monitor.py` داخل محرك SIP/RTP الأصلي، من غير أي PBX وسيط. **لا يبدأ التقاط الصوت بمجرد فتح Dashboard**؛ يلزم طلب من المدير، وموافقة من حساب Reviewer مستقل، ثم أمر محدد لمكالمة Native مستمرة مرتبطة بنفس رقم الموظف. بعد الموافقة، يبدأ الـRTP tap داخليًا ويرسل PCM16 بمعدل 16kHz إلى WebSocket داخل لوحة المراجعة، مع صلاحية تذكرة قصيرة لمرة واحدة وسجل Audit. يستطيع المشرف إيقاف الاستماع من الواجهة، ويزيل المحرك الـtap إذا انتهت المكالمة أو سُحبت الموافقة.
+
+الاستماع **مغلق افتراضيًا**. لتجربته على loopback معملًا، اضبط `MONITORING_ENABLED=true` ومفتاحًا قويًا مختلفًا `MONITOR_ENGINE_KEY` وحسابًا مستقلًا `APP_REVIEWER_USER`/`APP_REVIEWER_PASSWORD` في `.env`، ثم شغّل لوحة الإدارة ومحرك SIP باستخدام:
+
+```bash
+python -m telephony.native_switch \
+  --config telephony/native_switch.local.json \
+  --lab --local-events --local-monitor \
+  --monitor-origin http://127.0.0.1:8000
+```
+
+تظل المكالمة مؤرشفة **ملف WAV واحد ستيريو** عند تفعيل التسجيل بإذن؛ الاستماع ليس تسجيلًا ثانيًا، ولا تتغير وسائط RTP المتجهة للتليفون أو العميل. **لا توجد Whisper/Barge أو استخدام إنتاجي في v1.1.** انظر [دليل الاستماع المعملي](docs/NATIVE_LIVE_LISTEN_LAB.md).

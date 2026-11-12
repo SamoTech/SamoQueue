@@ -79,9 +79,15 @@ function drawDonut(agents){const names=['available','busy','acw','away','offline
 }
 function renderCalls(){const d=snapshot,filter=$('callFilter').value;let calls=d.calls.filter(c=>filter==='all'||c.status===filter);
  $('callMiniStats').innerHTML=[['Waiting',d.totals.waiting],['In conversation',d.totals.active_calls],['Answered today',d.totals.answered],['Abandoned today',d.totals.abandoned]].map(([l,n])=>`<div class="mini-stat"><p>${l}</p><strong>${num(n)}</strong></div>`).join('');
- $('callRows').innerHTML=calls.length?calls.map(c=>`<tr><td class="table-strong">${escapeHtml(c.external_id)}</td><td>${escapeHtml(c.caller)}</td><td>${escapeHtml(queueBy(c.queue_id)?.name||c.queue_id)}</td><td>${badge(c.status)}</td><td>${timeFmt(c.arrived_at)}</td><td>${duration(c.wait_seconds)}</td><td>${escapeHtml(agentBy(c.agent_id)?.name||'—')}</td><td>${c.status==='answered'&&c.source==='queuepilot-native'&&userRole==='admin'?`<button class="small-button" data-request-listen="${escapeHtml(c.id)}">Request listen</button>`:'—'}</td></tr>`).join(''):emptyRow(8,'No matching call events');document.querySelectorAll('[data-request-listen]').forEach(b=>b.onclick=()=>requestListen(b.dataset.requestListen));}
+ $('callRows').innerHTML=calls.length?calls.map(c=>`<tr><td class="table-strong">${escapeHtml(c.external_id)}</td><td>${escapeHtml(c.caller)}</td><td>${escapeHtml(queueBy(c.queue_id)?.name||c.queue_id)}</td><td>${badge(c.status)}</td><td>${timeFmt(c.arrived_at)}</td><td>${duration(c.wait_seconds)}</td><td>${escapeHtml(agentBy(c.agent_id)?.name||'—')}</td><td>${c.status==='answered'&&c.source==='queuepilot-native'&&userRole==='admin'?`<button class="small-button" data-request-listen="${escapeHtml(c.id)}">Request listen</button> ${c.control?.state==='pending'?'<span class="tag amber">Command pending</span>':`<button class="small-button" data-call-action="${c.hold_active?'resume':'hold'}" data-call-id="${escapeHtml(c.id)}">${c.hold_active?'Resume':'Hold'}</button>`}${c.control?` <span class="tag ${c.control.state==='rejected'?'red':'gray'}">${escapeHtml(c.control.action)}: ${escapeHtml(c.control.state)}</span>`:''}`:'—'}</td></tr>`).join(''):emptyRow(8,'No matching call events');document.querySelectorAll('[data-request-listen]').forEach(b=>b.onclick=()=>requestListen(b.dataset.requestListen));
+ document.querySelectorAll('[data-call-action]').forEach(b=>b.onclick=async()=>{
+   const action=b.dataset.callAction;if(!confirm('Request lab '+action+' for this live call?'))return;
+   try{await api('/engine/calls/'+encodeURIComponent(b.dataset.callId)+'/control',
+     {method:'POST',body:JSON.stringify({action})});flash(action+' request queued; verify engine acknowledgement');refresh();}
+   catch(e){flash('Call control: '+e.message);}
+ });}
 function renderAgents(){const a=snapshot.agents;$('agentMiniStats').innerHTML=[['Total agents',a.length],['Available',a.filter(x=>x.status==='available').length],['On call',a.filter(x=>x.status==='busy').length],['Unavailable',a.filter(x=>['away','offline','acw'].includes(x.status)).length]].map(([l,n])=>`<div class="mini-stat"><p>${l}</p><strong>${num(n)}</strong></div>`).join('');
- $('agentRows').innerHTML=a.length?a.map(x=>`<tr><td><div class="table-strong">${escapeHtml(x.name)}</div><div class="table-sub">${escapeHtml(x.id)}</div></td><td>${escapeHtml(x.extension||'—')}</td><td>${escapeHtml(queueBy(x.queue_id)?.name||'Unassigned')}</td><td>${badge(x.status)}</td><td>${timeFmt(x.last_change)}</td><td><button class="small-button" data-status="${escapeHtml(x.id)}">Edit</button></td></tr>`).join(''):emptyRow(6,'No agents registered');
+ $('agentRows').innerHTML=a.length?a.map(x=>`<tr><td><div class="table-strong">${escapeHtml(x.name)}</div><div class="table-sub">${escapeHtml(x.id)}</div></td><td>${escapeHtml(x.extension||'—')}</td><td>${escapeHtml(queueBy(x.queue_id)?.name||'Unassigned')}</td><td>${badge(x.status)}${x.control_state&&x.control_state!=='applied'?` <span class="tag amber">${escapeHtml(x.control_state)}: ${escapeHtml(x.desired_state)}</span>`:''}</td><td>${timeFmt(x.last_change)}</td><td><button class="small-button" data-status="${escapeHtml(x.id)}">Edit</button></td></tr>`).join(''):emptyRow(6,'No agents registered');
  document.querySelectorAll('[data-status]').forEach(x=>x.onclick=()=>statusModal(x.dataset.status));}
 function renderReports(){const qs=snapshot.queues,d=snapshot.totals;
  $('reportMiniStats').innerHTML=[['Answered today',d.answered],['Abandoned today',d.abandoned],['Service level',pct(d.sla_percent)],['Total queues',d.total_queues]].map(([l,n])=>`<div class="mini-stat"><p>${l}</p><strong>${n}</strong></div>`).join('');
@@ -97,14 +103,18 @@ const selectField = (name,label,items,value)=>`<div class="field"><label for="fl
 function openModal(title,body,kind,id=null){modalKind=kind;modalId=id;$('modalTitle').textContent=title;$('modalFields').innerHTML=body;$('modalError').textContent='';$('modal').showModal();}
 function queueModal(id=null){const q=id?queueBy(id):{name:'',skill:'',sla_seconds:20,target_percent:80,enabled:1};openModal(id?'Edit queue':'Create queue',field('name','Queue name',q.name)+field('skill','Local ACD skill label',q.skill)+field('sla_seconds','SLA threshold (seconds)',q.sla_seconds,'number')+field('target_percent','SLA target (%)',q.target_percent,'number')+selectField('enabled','Enabled',[['true','Enabled'],['false','Disabled']],q.enabled?'true':'false'),'queue',id);}
 function agentModal(){openModal('Add agent',field('name','Full name')+field('extension','Extension number')+selectField('queue_id','Assigned queue',[['','Unassigned'],...snapshot.queues.map(q=>[q.id,q.name])],'')+selectField('status','Initial local status',Object.entries(statuses).filter(([s])=>['available','busy','acw','away','offline'].includes(s)).map(([s,val])=>[s,val[0]]),'offline'),'agent');}
-function statusModal(id){const a=agentBy(id);if(!a)return;openModal('Edit local agent status',`<p class="small-note">Directory-only. Native SIP engine presence synchronization is not connected yet.</p>`+selectField('status',a.name,[['available','Available'],['busy','On call'],['acw','After-call work'],['away','Away'],['offline','Offline']],a.status),'status',id);}
+function statusModal(id){const a=agentBy(id);if(!a)return;
+ const options=a.native_managed?[['available','Available'],['away','Away'],['offline','Offline']]:[['available','Available'],['busy','On call (directory only)'],['acw','After-call work (directory only)'],['away','Away'],['offline','Offline']];
+ const help=a.native_managed?'Sends a durable request to the local QueuePilot ACD. Active calls are never interrupted; pending commands apply when the agent is idle.':'This agent is not mapped to the local SIP engine; status is directory-only.';
+ openModal('Edit agent availability',`<p class="small-note">${escapeHtml(help)}</p>`+selectField('status',a.name,options,a.desired_state?({ready:'available',aux:'away',offline:'offline'}[a.desired_state]||a.status):a.status),'status',id);
+}
 $('newQueueBtn').onclick=()=>queueModal();$('newAgentBtn').onclick=()=>agentModal();
 $('closeModal').onclick=()=> $('modal').close();$('cancelModal').onclick=()=> $('modal').close();
 $('modalForm').onsubmit=async e=>{e.preventDefault();$('modalError').textContent='';const form=new FormData(e.target);const data=Object.fromEntries(form.entries());
- try{if(modalKind==='queue'){data.sla_seconds=Number(data.sla_seconds);data.target_percent=Number(data.target_percent);data.enabled=data.enabled==='true';await api(modalId?'/queues/'+modalId:'/queues',{method:modalId?'PUT':'POST',body:JSON.stringify(data)});}else if(modalKind==='agent'){data.queue_id=data.queue_id||null;await api('/agents',{method:'POST',body:JSON.stringify(data)});}else if(modalKind==='status'){await api('/agents/'+modalId+'/status',{method:'PATCH',body:JSON.stringify(data)});} $('modal').close();flash('Saved successfully');refresh();}catch(err){$('modalError').textContent=err.message;}};
+ try{if(modalKind==='queue'){data.sla_seconds=Number(data.sla_seconds);data.target_percent=Number(data.target_percent);data.enabled=data.enabled==='true';await api(modalId?'/queues/'+modalId:'/queues',{method:modalId?'PUT':'POST',body:JSON.stringify(data)});}else if(modalKind==='agent'){data.queue_id=data.queue_id||null;await api('/agents',{method:'POST',body:JSON.stringify(data)});}else if(modalKind==='status'){const result=await api('/agents/'+modalId+'/status',{method:'PATCH',body:JSON.stringify(data)});$('modal').close();flash(result.scope==='pending_native_runtime'?'Request queued for native SIP runtime':'Directory status saved');refresh();return;} $('modal').close();flash('Saved successfully');refresh();}catch(err){$('modalError').textContent=err.message;}};
 
 
-// Contact center operations v0.3: recorder-backed audio, audited supervisor monitoring, IVR planning and exports.
+// QueuePilot lab: one stereo WAV, approved RTP listening, IVR drafts and reports.
 let recordingBlobUrl=null;
 let monitoringSocket=null;
 let monitorAudioContext=null;
@@ -140,7 +150,7 @@ async function loadRecordings(){
       <td>${escapeHtml(r.agent_name||'—')}</td><td>${duration(r.duration_seconds)}</td>
       <td>${(r.bytes/1024/1024).toFixed(1)} MB</td>
       <td><button class="small-button" data-play="${escapeHtml(r.id)}">Play</button>
-      <button class="small-button" data-download="${escapeHtml(r.id)}">↓</button></td></tr>`).join(''):emptyRow(7,'No recordings yet. An authorized recorder must send a WAV/MP3/OGG call recording.');
+      <button class="small-button" data-download="${escapeHtml(r.id)}">↓</button></td></tr>`).join(''):emptyRow(7,'No recordings indexed yet. Native RTP capture requires explicit lab opt-in and an approved notice policy.');
     document.querySelectorAll('[data-play]').forEach(b=>b.onclick=()=>{
       const r=data.recordings.find(x=>x.id===b.dataset.play);if(r)playRecording(r.id,r.original_name);
     });
@@ -171,7 +181,7 @@ async function loadMonitoring(){
     document.querySelectorAll('[data-monapprove]').forEach(b=>b.onclick=async()=>{
       if(window.prompt('Separate approval required. Type APPROVE LIVE LISTEN')!=='APPROVE LIVE LISTEN')return;
       try{await api('/cc/monitor/sessions/'+encodeURIComponent(b.dataset.monapprove)+'/approve',
-       {method:'POST',body:JSON.stringify({confirmation:'APPROVE LIVE LISTEN'})});flash('Approved; awaiting native observer implementation');loadMonitoring();}
+       {method:'POST',body:JSON.stringify({confirmation:'APPROVE LIVE LISTEN'})});flash('Approved; waiting for the opt-in native RTP observer to attach');loadMonitoring();}
       catch(e){flash(e.message);}
     });
     document.querySelectorAll('[data-monstop]').forEach(b=>b.onclick=async()=>{
@@ -200,7 +210,7 @@ async function connectMonitorAudio(sid){
     const scheme=location.protocol==='https:'?'wss:':'ws:';
     const ws=new WebSocket(scheme+'//'+location.host+'/api/cc/monitor/sessions/'+encodeURIComponent(sid)+'/audio/ws?ticket='+encodeURIComponent(result.ticket));
     monitoringSocket=ws;ws.binaryType='arraybuffer';
-    $('livePlayerWrap').hidden=false;$('liveAudioState').textContent='Connecting to approved media gateway…';
+    $('livePlayerWrap').hidden=false;$('liveAudioState').textContent='Connecting to QueuePilot native RTP observer…';
     ws.onopen=()=>$('liveAudioState').textContent='Stream connected · 16kHz PCM';
     ws.onclose=()=>$('liveAudioState').textContent='Disconnected (or no active session)';
     ws.onerror=()=>$('liveAudioState').textContent='Media gateway error';

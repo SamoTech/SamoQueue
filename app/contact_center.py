@@ -1,9 +1,11 @@
 """Call-center operations domain: recorder ingest, audited playback, monitor gateway,
 IVR drafts, and independently exportable event-derived reports.
 
-The native SIP/RTP runtime is not yet wired to recording storage, IVR execution, or
-supervisor mixing. These APIs are local management/runtime integration scaffolding,
-not proof of active recording, listening, or IVR playback.
+The native SIP/RTP runtime can archive ONE *lab-only* stereo WAV after
+call completion when explicitly enabled and notice policy is acknowledged.
+Native RTP recording, local voice IVR and approved live listening have
+lab-only integration paths. Dashboard IVR drafts are NOT published to the
+SIP runtime. Nothing here certifies real Avaya hardware or production use.
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, model_validator
 
 from .audit import audit
@@ -161,7 +163,7 @@ def recordings(limit: int = Query(default=100, ge=1, le=1000),
     with connection() as db:
         rows = [dict(r) for r in db.execute(sql, values)]
     return {'recordings': rows, 'recording_enabled': config.recordings_enabled,
-            'note': 'Native RTP-to-library capture is not yet connected; no external recorder required by architecture'}
+            'note': 'Native SIP lab can archive one approximately time-aligned stereo WAV per call (caller left, agent right), when explicitly enabled. Not production-grade recording or consent enforcement.'}
 
 
 @router.get('/recordings/{recording_id}/audio')
@@ -220,7 +222,7 @@ def list_monitors(user=Depends(require_supervisor)):
                    JOIN calls c ON c.id=s.call_id JOIN queues q ON q.id=c.queue_id
                    LEFT JOIN agents a ON a.id=c.agent_id ORDER BY s.created_at DESC LIMIT 100''')]
     return {'sessions': rows, 'enabled': config.monitoring_enabled,
-            'transport': 'PCM16/16000/mono internal WebSocket relay (requires native RTP observation mixer)'}
+            'transport': 'PCM16/16000/mono internal WebSocket relay (opt-in native RTP lab observer)'}
 
 
 @router.post('/monitor/sessions/{sid}/approve')
@@ -305,6 +307,7 @@ def monitor_engine_result(sid: str, body: MonitorResult, _=Depends(check_monitor
         if not row:
             raise HTTPException(404, 'Monitoring session not found')
         allowed = ((row['state'] == 'leased' and body.result in ('active','failed','uncertain'))
+                   or (row['state'] == 'active' and body.result in ('ended','failed','uncertain'))
                    or (row['state'] in ('stop_leased','stop_requested') and body.result in ('ended','failed','uncertain')))
         if not allowed:
             raise HTTPException(409, 'Invalid transition for the currently leased monitor operation')
@@ -328,6 +331,8 @@ _tickets: dict[str, tuple[str, float]] = {}
 
 @router.post('/monitor/sessions/{sid}/audio-ticket')
 def audio_ticket(sid: str, user=Depends(require_reviewer)):
+    if not config.monitoring_enabled:
+        raise HTTPException(403, 'Monitoring disabled')
     with connection() as db:
         s = db.execute('''SELECT s.state,s.created_by,s.active_at,c.status AS call_status FROM monitor_sessions s
                           JOIN calls c ON c.id=s.call_id WHERE s.id=?''', (sid,)).fetchone()
@@ -347,6 +352,9 @@ def audio_ticket(sid: str, user=Depends(require_reviewer)):
 
 @router.websocket('/monitor/sessions/{sid}/audio/ws')
 async def monitor_audio_socket(ws: WebSocket, sid: str):
+    if not config.monitoring_enabled:
+        await ws.close(code=1008)
+        return
     ticket = ws.query_params.get('ticket', '')
     stored = _tickets.pop(hashlib.sha256(ticket.encode()).hexdigest(), None) if ticket else None
     if not stored or stored[0] != sid or time.time() > stored[1]:
@@ -364,7 +372,13 @@ async def monitor_audio_socket(ws: WebSocket, sid: str):
     try:
         while True:
             try:
-                frame = await asyncio.wait_for(q.get(), timeout=5)
+                frame = await asyncio.wait_for(q.get(), timeout=0.5)
+                with connection() as db:
+                    row = db.execute('''SELECT s.state,s.active_at,c.status AS call_status FROM monitor_sessions s
+                              JOIN calls c ON c.id=s.call_id WHERE s.id=?''', (sid,)).fetchone()
+                if not row or row['state'] != 'active' or row['call_status'] != 'answered' or not config.monitoring_enabled:
+                    await ws.close(code=1000)
+                    break
                 await ws.send_bytes(frame)
             except asyncio.TimeoutError:
                 with connection() as db:
