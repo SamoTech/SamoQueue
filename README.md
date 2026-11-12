@@ -1,67 +1,256 @@
-# QueuePilot v0.7 — Independent SIP Contact Center (LAB)
+# QueuePilot — Independent Contact Center Platform
 
-QueuePilot is being built as an **independent contact-center platform**, not an Avaya management console. **Avaya Aura hands off inbound calls over SIP; all queue decisions, agent SIP sessions, call media, IVR, recording and supervision are intended to be owned by QueuePilot.** There is no Asterisk, FreeSWITCH, AES, WTI, TSAPI, or DMCC component in this repository.
+**الإصدار الحالي: v0.7 (Native SIP Laboratory Foundation) — مرحلة تطوير واختبار، غير جاهز للإنتاج.**
 
-> **Release status: restricted lab / development. NOT production-ready.** A simulated SIP trunk and softphone have been tested; Avaya Aura and actual Avaya IP handset interoperability have not been verified. Many requested call-center features are still only management scaffolding or planned. Do **not** route customer calls to this release.
+> **الرؤية الأساسية:** Avaya Aura/Communication Manager تستقبل المكالمات من شبكة الاتصالات وتُسلّمها إلى QueuePilot عبر **SIP Trunk** فقط. بعد التسليم، **QueuePilot هو المسؤول الوحيد عن منطق مركز الاتصال**: استقبال جلسات SIP، الـIVR، اختيار الـQueue، توزيع المكالمات (ACD)، الاتصال بتليفونات الموظفين، مرور الصوت (RTP)، التسجيل، متابعة المشرفين والتقارير.
+>
+> **لا يستخدم المشروع Asterisk أو FreeSWITCH أو Avaya AES/WTI/TSAPI/DMCC أو أي PBX/ACD خارجي.** محرك SIP/RTP الجاري تطويره جزء من كود QueuePilot نفسه، وليس نظامًا وسيطًا. هذا وصف **للهدف المعماري**؛ وليس ادعاءً بأن كل هذه الوظائف اكتملت الآن.
 
-## What actually works today
+**English summary:** QueuePilot is intended to be a self-contained, native SIP contact center. Avaya Aura provides inbound SIP handoff only. QueuePilot owns its ACD, phone registration, two-leg call control, anchored media, IVR, recording, monitoring and reporting. Current code is a **restricted lab prototype**, not a deployable production switch; the features below are explicitly distinguished as tested, partial or pending.
 
-- Native UDP/IPv4 SIP REGISTER with SHA-256 Digest and time-limited nonces (lab subset).
-- Allowlisted inbound SIP INVITE / DID routing; an independent in-memory ACD chooses a registered agent according to skills and longest idle time.
-- Agent outbound INVITE, basic SIP responses/ACK/BYE/CANCEL, anchored two-way G.711 RTP in an isolated lab.
-- Optional local per-leg diagnostic WAV capture, **disabled by default**.
-- Separate management service with queue/agent directory, call history, dashboard, basic SLA, recording library, audited supervisor approval workflow, IVR **drafts**, and ten CSV/JSON/ZIP report datasets.
-- **v0.7:** the optional `--local-events` adapter writes native SIP call lifecycle events straight into QueuePilot's SQLite database (no PBX CTI bridge). The dashboard displays the source's **reported** health. The adapter validates its queue and agent IDs against the dashboard database before starting.
-- Existing legacy PBX integration endpoints, bridge workers, UI, setup keys, and obsolete documentation were removed.
+## 1. الفكرة: ما الذي تديره Avaya وما الذي يديره QueuePilot؟
 
-## Run management dashboard locally
+| Avaya Aura — قبل تسليم المكالمة | QueuePilot — بعد التسليم |
+|---|---|
+| استقبال المكالمة من PSTN / خطوط الشركة | استقبال `INVITE` على SIP listener مستقل |
+| اختيار SIP route المخصص لتسليم المكالمة | تحديد القسم من DID ثم IVR/Business Rules (الـIVR الصوتي مخطط له) |
+| تسليم SIP signaling والصوت وفق إعدادات الـTrunk | إنشاء Queue، تشغيل ACD، اختيار الموظف، إرسال `INVITE` إلى تليفونه |
+| توفير مسار احتياطي عند تعطل QueuePilot حسب تصميم الشبكة | تمرير RTP عبر QueuePilot، تشغيل التسجيل والمراقبة عند اكتمال تطويرهما |
+| **لا تدير موظفي QueuePilot أو مهاراتهم أو التسجيلات أو التقارير** | إدارة بيانات المكالمات والموظفين والصلاحيات والتقارير من داخل المنصة |
 
-Requires Python 3.11+.
+التليفون **لا يشترط أن يكون من علامة تجارية معينة**؛ لكنه يجب أن يدعم SIP ويقبل التسجيل على QueuePilot أو الاتصال المباشر به وفق نظام تسجيل/تهيئة متوافق. **Avaya IP Phone لا يعني تلقائيًا SIP Phone**: أجهزة H.323-only أو التي تتطلب خوادم تسجيل/تهيئة Avaya لا يمكن افتراض توافقها مع المحرك الحالي. يلزم اختبار كل موديل وFirmware فعليًا قبل أي تشغيل حقيقي.
+
+## 2. الصورة الكاملة للنظام (Target Architecture)
+
+```mermaid
+flowchart TD
+    Caller[المتصل / PSTN] --> Aura[Avaya Aura / Communication Manager]
+    Aura -->|SIP INVITE + SDP / RTP handoff| Ingress[QueuePilot Native SIP Ingress]
+    subgraph QP[QueuePilot - نظام مستقل]
+        Ingress --> Call[Native SIP B2BUA / Call Controller]
+        Call --> IVR[IVR / DTMF / Business Hours - مستهدف]
+        IVR --> Queue[ACD / Skills / Priority / Queues]
+        Queue --> Registrar[SIP Registrar / Agent Location]
+        Call <--> Media[RTP Media Anchor / Recording / Monitor]
+        Media --> Events[Call Events / CDR / Analytics]
+        Events --> DB[(QueuePilot Database)]
+        DB --> Dashboard[Supervisor Dashboard / Reports]
+    end
+    Registrar -->|SIP INVITE| Phone[IP Phone SIP متوافق]
+    Media <-->|RTP anchored through QueuePilot| Phone
+```
+
+- **SIP / B2BUA:** إنشاء جلسة مكالمة منفصلة مع Avaya، وجلسة أخرى مع تليفون الموظف، وإدارة حالات الاتصال. بعض أوامر SIP الأساسية موجودة **معمليًا**؛ لا توجد بعد تغطية كاملة لـRFC 3261.
+- **ACD:** اختيار الموظف المؤهل بناءً على المهارات، حالة الجاهزية، الأولوية، وأطول مدة انتظار للموظف؛ ثم معالجة عدم الرد وإعادة المحاولة.
+- **RTP Media Anchor:** الصوت يمر عبر QueuePilot في الاتجاهين، وليس مباشرة من Avaya إلى التليفون؛ ده شرط أساسي للتسجيل والاستماع المباشر والـIVR داخل QueuePilot.
+- **Management & Reports:** لوحة الإدارة وقاعدة البيانات جزء من نفس المشروع. حاليًا تطبيق الويب ومحرك SIP يعملان في **عمليتين محليتين منفصلتين تابعتين لـQueuePilot**؛ وليس في أي PBX مستقل.
+
+## 3. رحلة المكالمة المطلوبة — خطوة بخطوة
+
+1. **وصول المكالمة:** العميل يتصل برقم الشركة؛ Avaya تستقبلها وتوجهها إلى عنوان QueuePilot المسموح به عبر SIP Trunk، مع رقم المتصل والرقم المطلوب (DID) حسب إعدادات التسليم.
+2. **التحقق:** QueuePilot يتحقق من عنوان مصدر الـSIP والرسالة والـSDP وسياسات الدخول. في النسخة المعملية توجد قوائم سماح للمصادر؛ مصادقة الإنتاج عبر النقل الآمن والمواصفات الكاملة ما زالت مطلوبة.
+3. **تحديد الخدمة:** يربط DID بالـQueue (متاح معمليًا). **الهدف القادم** تنفيذ IVR صوتي حقيقي يدعم الرسائل والقوائم وأزرار DTMF ومواعيد العمل والتحويل بين الأقسام.
+4. **الدخول للطابور:** ACD يسجّل المكالمة ويبحث عن موظف جاهز تتطابق مهاراته مع متطلبات المكالمة، مع مراعاة الأولوية وأطول مدة توافر؛ وإذا لم يرد الموظف يجرّب غيره حسب السياسة.
+5. **الاتصال بالموظف:** QueuePilot يحدد مكان تليفون SIP المسجل لديه ويُرسل له `INVITE` مباشرة. **التسجيل والاتصال مجرّبان في بيئة SIP محاكاة فقط**.
+6. **الرد ونقل الصوت:** بعد قبول الموظف، يربط QueuePilot طرفَي المكالمة ويمرّر G.711 RTP عبر محرك الصوت الداخلي. **ده مُختبَر معمليًا، وليس على Avaya فعلية**.
+7. **التسجيل والمراقبة:** في التصميم النهائي يتم التسجيل والاستماع بإذن وصلاحيات وتدقيق، مع احتفاظ QueuePilot بالوسائط. الموجود حاليًا: تسجيل WAV تشخيصي اختياري لكل طرف (مغلق افتراضيًا)، ومكتبة لاستيراد التسجيلات وواجهة طلبات المراقبة، **دون دمج مباشر مع RTP الحقيقي**.
+8. **الإغلاق والتقارير:** تُحدَّث حالة المكالمة والموظف (ومنها After-Call Work) وتُسجَّل الأحداث. التكامل المحلي الاختياري يكتب أحداث دورة المكالمة في قاعدة البيانات لعرضها بالداشبورد؛ **الاستمرارية وإعادة تشغيل الأحداث المفقودة غير مكتملتين**.
+
+### مثال توضيحي
+
+```text
+المتصل يطلب 6000
+  -> Avaya Aura: SIP handoff إلى QueuePilot
+  -> QueuePilot: DID 6000 -> support
+  -> ACD: agent-1 جاهز + مهارة english
+  -> QueuePilot: SIP INVITE إلى امتداد 1001 المسجل عليه
+  -> الموظف يرد -> QueuePilot يربط G.711 RTP
+  -> انتهاء المكالمة -> Call Event -> Dashboard / Reports
+```
+
+الأرقام والأسماء أعلاه **عينة اختبار فقط**، وليست إعدادات شبكة العميل الحقيقية.
+
+## 4. الوظائف: المنفّذ حاليًا مقابل الهدف
+
+| الوظيفة | الحالة في v0.7 | ما ينقص للإنتاج |
+|---|---|---|
+| SIP REGISTER / مصادقة التليفون | ✅ اختبار محلي: Digest SHA-256 + nonce | توافق التليفونات الفعلية، TLS، تهيئة ومراقبة الأجهزة |
+| استقبال SIP من مصدر مسموح + DID mapping | ✅ اختبار معملي | تكامل Avaya Trunk الحقيقي وتوافق SIP/SDP |
+| ACD Skills / Priority / Longest Idle / retry / ACW | ✅ قواعد واختبارات محلية | حالة دائمة، مزامنة الموظفين ومعالجة إعادة التشغيل |
+| اتصال الموظف SIP ثنائي الطرف (INVITE/ACK/BYE/CANCEL) | ✅ نطاق معملي محدود | معاملات SIP كاملة، timers/retransmissions، transfer/hold/re-INVITE |
+| نقل الصوت G.711 RTP في الاتجاهين | ✅ اختبار محلي | SRTP/RTCP/jitter/DTMF/codec interoperability ومراقبة الجودة |
+| Dashboard / إدارة Queues وAgents | ✅ واجهة وAPI محليًا | صلاحيات مؤسسية، مزامنة حية كاملة، نشر آمن |
+| حفظ أحداث Native SIP في قاعدة البيانات | 🟡 اختياري بـ`--local-events` | Event journal دائم وإعادة إرسال ومطابقة CDR |
+| IVR Flow Editor / إنشاء مسودات | 🟡 موجود | تشغيل prompts وDTMF وBusiness Hours فعليًا داخل محرك الصوت |
+| Recording Library: استيراد/بحث/تشغيل | 🟡 موجودة للتسجيلات المستوردة | تسجيل المكالمات الحقيقي، ربط RTP، retention، consent |
+| Diagnostic WAV لكل طرف | 🟡 خيار Lab معطّل افتراضيًا | سياسات الخصوصية وحماية الملفات وربط المكتبة |
+| Live Listen / Approval / Browser Audio Gateway | 🟡 API وWorkflow فقط | ربط RTP mixer/observer حي وآمن بالمكالمة |
+| Whisper / Barge / Conference | ❌ مخطط | Mix/Inject Media وSIP Conference Controller |
+| Hold / Transfer / Music on Hold | ❌ غير مكتمل | تطوير كامل وإجراء اختبارات تداخل المكالمات |
+| Reports / CSV / JSON / ZIP | 🟡 10 مجموعات بيانات | اكتمال الأحداث، مقاييس الإنتاج، استرجاع الأعطال وموثوقية الأرقام |
+| High Availability / Failover / PostgreSQL / SSO | ❌ غير منفذ | تنفيذ واعتماد تشغيلي |
+
+**لا يجوز تفسير ✅ على أنها اعتماد إنتاجي**: المقصود نجاح اختبارات محلية بمحاكاة SIP، ولم يُختبر بعد جهاز Avaya IP Phone حقيقي أو SIP Trunk تابع لعميل.
+
+## 5. إدارة الكول سنتر والتقارير
+
+اللوحة الحالية توفر إدارة الطوابير والموظفين، سجل المكالمات، عرض مؤشرات SLA أساسية، مكتبة تسجيلات مستوردة، مسودات IVR، وطلبات موافقة للمراقبة. التقارير المتاحة حاليًا عبر `/api/cc/reports`:
+
+| Report | المحتوى |
+|---|---|
+| `calls` | تفاصيل المكالمات وحالاتها |
+| `queues` | أداء الطوابير |
+| `agents` | أداء الموظفين ومؤشرات الرد |
+| `intervals` | تقسيمات زمنية نصف ساعة |
+| `sla` | مستوى الخدمة المحسوب من الأحداث المسجلة |
+| `recordings` | البيانات الوصفية للتسجيلات المستوردة |
+| `monitoring` | طلبات/حالات المراقبة وتدقيقها |
+| `ivr` | بيانات مسودات وتعديلات تدفقات IVR |
+| `audit` | سجل العمليات الإدارية |
+| `events` | الأحداث المستلمة من محرك المكالمات |
+
+- صيغ التصدير الموجودة: **JSON، CSV، وZIP مجمّع يضم ملفات CSV**. **XLSX/PDF ليست صيغ تصدير مدمجة حاليًا**.
+- التقارير الحالية **مشتقة من الأحداث الموجودة بقاعدة البيانات**، ولذلك لا تُعد تقارير تشغيلية نهائية قبل وجود مصدر أحداث موثوق ومتصل بكل دورة مكالمة وتسجيل حالات الموظفين بدقة.
+- من مقاييس الإنتاج المستهدفة مستقبلًا: Offered/Answered/Abandoned، ASA، AHT، Service Level، Occupancy، Agent States/AUX/ACW، Transfers، Callback، Recording Coverage، Quality، Interval/Team/Skill reports.
+
+## 6. بنية المستودع
+
+```text
+.
+├── app/
+│   ├── main.py                 # FastAPI routes, admin dashboard, native event API
+│   ├── service.py              # Call lifecycle and reporting domain
+│   ├── contact_center.py       # Recordings library, monitoring workflow, IVR drafts, report exports
+│   ├── db.py                   # SQLite schema and migration support
+│   ├── audit.py, security.py, config.py, models.py
+│   └── static/                 # Web dashboard (HTML, CSS, JS)
+├── telephony/
+│   ├── native_switch.py        # Embedded SIP call controller; LAB ONLY
+│   ├── sip_stack.py            # SIP message parsing/auth/SDP primitives
+│   ├── native_sip.py           # Ingress rules, phone directory, call planning
+│   ├── acd.py                  # Skills-based queue scheduling
+│   ├── rtp_media.py            # Embedded G.711 RTP relay and diagnostic audio
+│   ├── local_events.py        # Optional direct local event writer into QueuePilot DB
+│   └── native_switch.example.json
+├── tests/                      # Backend, ACD, signaling/media and event tests
+├── docs/
+│   ├── NATIVE_SIP_CALLCENTER_ARCHITECTURE.md
+│   └── CODEBASE_CLEANUP_AUDIT.md
+├── .github/workflows/ci.yml   # Automated lab checks (when GitHub Actions runs)
+├── .env.example                # Placeholders; never commit real secrets
+├── setup_demo.py               # One-time local demo configuration
+├── run.py                      # Management web API
+└── requirements.txt
+```
+
+**ما أزيل عمدًا:** كود تحكم Avaya AES/WTI، Bridge الخاص به، وصفحة إدارة Avaya، الأمثلة والوثائق والاختبارات المرتبطة بالبنية القديمة، وأمثلة Asterisk. ملفات البيانات القديمة الموجودة مسبقًا في قاعدة بيانات مطوَّرة **لا تُحذف تلقائيًا**.
+
+## 7. التشغيل المحلي — تجربة التطوير فقط
+
+**المتطلبات:** Python 3.11+، شبكة محلية/Loopback معزولة لاختبارات SIP، ونظام تشغيل مناسب. لا تشغّل المحرك الحالي على SIP Trunk إنتاجي.
+
+### 7.1 تشغيل لوحة QueuePilot
 
 ```bash
+# من جذر المستودع
 python -m venv .venv
-# Linux/macOS: source .venv/bin/activate
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python setup_demo.py               # once: writes .env with unique demo secrets
+# Linux/macOS:
+source .venv/bin/activate
+# Windows PowerShell:
+# .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python setup_demo.py
 python run.py
 ```
 
-Open `http://127.0.0.1:8000` on the test machine. The setup script prints the generated administrator password once. `.env` and all runtime data must remain uncommitted.
+افتح `http://127.0.0.1:8000` من جهاز الاختبار. يُنشئ `setup_demo.py` ملف `.env` وكلمة مرور مدير عشوائية يعرضها **مرة واحدة**، ويرفض الكتابة فوق `.env` موجود. وضع Demo مخصص للاختبار فقط.
 
-The standalone native SIP lab starts separately (same project, **no external telephony system**):
+بديلًا عن Demo، انسخ `.env.example` إلى `.env` واضبط **كل** المتغيرات والأسرار المطلوبة بصورة صحيحة. لا ترفع `.env` إلى GitHub.
+
+### 7.2 تشغيل محرك SIP الداخلي في معمل معزول
 
 ```bash
 cp telephony/native_switch.example.json telephony/native_switch.local.json
-# Replace every REPLACE_ placeholder with unique secrets.
-python -m telephony.native_switch --config telephony/native_switch.local.json --lab
+# Windows: انسخ الملف يدويًا أو استخدم Copy-Item.
+# بدّل جميع REPLACE_ placeholders، واترك listen_ip وpeer networks على loopback للاختبارات.
+python -m telephony.native_switch \
+  --config telephony/native_switch.local.json \
+  --lab
 ```
 
-**Optional reporting integration (lab only):** Create dashboard queues and agents first, replace the route `queue` and agent IDs in the local SIP JSON with their actual QueuePilot database IDs, then launch with `--lab --local-events`. Both processes must use the same `APP_DB_PATH`. The adapter writes directly to SQLite and records a local heartbeat. It is single-node and synchronous: **not a durable message bus, crash-recovery journal, or production-scale event stream**. If this ID validation fails, the SIP process refuses to start with local persistence enabled. Without the option, the dashboard does **not** get native SIP call events automatically.
+الملف المثال مُعدّ للاستماع على `127.0.0.1:15060` فقط. يرفض البرنامج البدء من غير `--lab`، وهو **ليس SIP gateway إنتاجيًا**.
 
-## API surface
+### 7.3 إظهار أحداث SIP في لوحة الإدارة (اختياري/معملي)
 
-- `POST /api/login`, `GET /api/dashboard`, `/api/queues`, `/api/agents` — dashboard management.
-- `POST /api/engine/events` and `/api/engine/heartbeat` — internal native-telephony event API; `X-Engine-Key` and exact `source=queuepilot-native` are mandatory. No Aura or external CTI endpoint exists.
-- `/api/cc/recordings`, `/api/cc/monitor`, `/api/cc/ivr`, `/api/cc/reports` — domain services. Native RTP recording import/streaming and IVR execution are **not integrated end-to-end**. Recording and monitoring flags are off by default.
+1. شغّل لوحة الإدارة، وأنشئ Queue وAgent باستخدام الواجهة/API.
+2. افتح `telephony/native_switch.local.json` واستبدل `routes[].queue` ومفاتيح `agents` بمعرّفات قاعدة بيانات QueuePilot الفعلية، وليس الأسماء الظاهرة فقط.
+3. تأكد من استخدام **نفس** `APP_DB_PATH` في عمليتَي الـDashboard والـSIP.
+4. أعد تشغيل محرك SIP مع الخيار `--local-events`:
 
-## Missing features and release blockers
+```bash
+python -m telephony.native_switch \
+  --config telephony/native_switch.local.json \
+  --lab --local-events
+```
 
-**Not completed:** complete RFC 3261 SIP dialogs/transactions, retransmissions, TLS/SRTP/RTCP, DTMF IVR prompt playback, hold/transfer/conference, production recordings, RTP mixing and live listening/whisper/barge, durable ACD/registration state, multi-node HA, comprehensive queue/agent metrics, disaster recovery, session recovery, production identity and compliance workflows. Real Avaya SIP trunk and Avaya phone firmware compatibility must be validated before use.
+يتحقق المحرك من معرّفات Queue/Agent الموجودة؛ ويفشل بدء الربط إذا كانت غير صالحة. مسار حفظ الأحداث هذا **مزامن، أحادي المضيف، وغير مضمون الاستعادة بعد انقطاع مفاجئ**؛ فلا تستخدمه كمصدر تقارير إنتاجية.
 
-The `app/` dashboard and `telephony/` runtime currently run as **two QueuePilot-owned processes**. That does not make them intermediary PBXs. `--local-events` shares a lab SQLite DB; it is not suitable for production concurrency/failover.
-
-## Security and preservation
-
-- Bound SIP networking to loopback in the supplied lab example. Do not expose UDP SIP/RTP, `/docs`, or internal engine APIs to public networks.
-- Use a private voice VLAN, strong per-phone credentials, legal recording notices/consent, secure audio storage, audit logs and supervised monitoring approvals.
-- Existing database tables created by the obsolete AES/Aura integration are **preserved, not used**. This cleanup does not delete historical data or recordings. The old audit table is copied idempotently to the generic `audit_log`. Back up the database before upgrading any existing installation.
-- `.env.example` contains placeholders only. Real phone secrets go in the ignored `telephony/native_switch.local.json`.
-
-See [architecture and gap analysis](docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md) and [the cleanup audit](docs/CODEBASE_CLEANUP_AUDIT.md). Run checks with:
+### 7.4 الاختبارات
 
 ```bash
 python -m pytest -q
 python -m compileall -q app telephony tests
 node --check app/static/app.js
 ```
+
+**التحقق الأخير لهذه الوثيقة:** 31 اختبار Python محلي ناجح على v0.7. لا يعني ذلك أن GitHub Actions نجح أو أن Avaya الحقيقية اختُبرت.
+
+## 8. واجهات الـAPI الرئيسية
+
+| المسار | الغرض |
+|---|---|
+| `POST /api/login` | الدخول إلى لوحة الإدارة |
+| `GET /api/health`, `/api/dashboard` | حالة الخدمة وإحصائيات اللوحة |
+| `POST /api/queues`, `POST /api/agents` | إدارة بيانات الطوابير والموظفين |
+| `POST /api/engine/events`, `POST /api/engine/heartbeat` | أحداث/نبض محرك QueuePilot الداخلية، بمفتاح `X-Engine-Key` |
+| `/api/cc/recordings` | مكتبة التسجيلات المستوردة والبيانات الوصفية والتشغيل المصرّح |
+| `/api/cc/monitor` | موافقات المراقبة وبوابة بث معملية، غير متصلة بـRTP الحقيقي |
+| `/api/cc/ivr` | إدارة مسودات IVR؛ ليس محرك تشغيل IVR |
+| `/api/cc/reports` | قائمة تقارير JSON/CSV/ZIP والتصدير |
+
+توثيق FastAPI التفاعلي متاح محليًا على `/docs` لأغراض التطوير. لا تنشره على الإنترنت من دون حمايات مناسبة. واجهات Native Engine **داخلية**، وليست Avaya CTI APIs.
+
+## 9. الأمان والخصوصية ومبادئ الاستقلال
+
+1. **Network isolation:** ضع SIP/RTP والتليفونات على Voice VLAN وشبكات موثوقة مع Allowlist محدد؛ الوجود على نفس الشبكة لا يغني عن المصادقة.
+2. **Secrets:** كلمات مرور الموظفين، مفاتيح API، وملفات `.env` و`native_switch.local.json` لا تدخل Git مطلقًا.
+3. **SIP/Media protection:** UDP/G.711 المعملي ليس بديلًا عن TLS/SRTP، حماية المعاملات، مقاومة إساءة الاستخدام وحماية التسجيلات.
+4. **Recording:** يلزم سياسة حفظ وتشفير وصلاحيات وإشعار/موافقة مناسبة حسب القوانين المطبقة. التسجيل التشخيصي معطل افتراضيًا، والتسجيل الإنتاجي غير منفّذ.
+5. **Supervisor monitoring:** كل طلب استماع يحتاج هوية مستقلة وصلاحية محددة وموافقة وتدقيق وإيقاف مضمون؛ الاستماع/Whisper/Barge على المكالمات الحية لم يُوصل بعد.
+6. **Data safety:** لا تحذف قواعد البيانات أو التسجيلات القديمة أثناء الترقية؛ النسخة v0.7 تحتفظ بالجداول التاريخية وتنقل Audit القديم إلى سجل عام بدون إسقاط المصدر.
+7. **Production operations:** ما زال مطلوبًا RBAC/SSO، قاعدة بيانات إنتاجية، event journal، نسخ احتياطية، High Availability، مراقبة سعة RTP/SIP، واختبارات اختراق وتحمل.
+
+## 10. خطة التنفيذ إلى نظام مستقل متكامل
+
+- **المرحلة A — نواة الاتصال:** استكمال SIP transactions/dialogs وSDP وTLS/SRTP والـDTMF واختبار التسجيل على موديلات Avaya SIP الحقيقية.
+- **المرحلة B — IVR/ACD:** تشغيل رسائل صوتية فعلية، Multi-level IVR، ساعات العمل، Queue Music، مهارات الموظفين، حالات AUX/Ready/ACW وHold/Transfer.
+- **المرحلة C — Media Operations:** إنتاج تسجيل تلقائي مرتبط بالمكالمة، ربط التسجيلات بالمكتبة، Live Listen وWhisper وBarge بصلاحيات وتدقيق قانوني.
+- **المرحلة D — Reports:** تخزين أحداث موثوق وقابل لإعادة التشغيل، سجلات CDR وAgent State دقيقة، مؤشرات SLA/ASA/AHT/Occupancy وصيغ تصدير إضافية عند تنفيذها.
+- **المرحلة E — Production Readiness:** PostgreSQL، SSO/RBAC، نسخ احتياطي، failover، اختبارات ضغط، استعادة بعد الأعطال، ومصفوفة توافق التليفونات وAvaya SIP Trunk.
+
+### شروط القبول قبل توصيل مكالمات عملاء حقيقيين
+
+- Avaya تُسلّم مكالمة SIP إلى QueuePilot، وتختفي أي حاجة لتدخل AES/WTI في إدارة المكالمة بعدها.
+- تليفون Avaya **SIP متوافق** يسجّل على QueuePilot ويرد على مكالمة حقيقية بصوت ثابت في الاتجاهين.
+- IVR يستقبل DTMF ويحوّل إلى Queue صحيحة؛ ACD يتعامل مع عدم الرد والانشغال والإلغاء.
+- Recording وLive Listening المصرّح بهما يعملان من نفس مسار RTP، مع مؤشرات واضحة وسياسات الموافقة.
+- كل مكالمة لها سجلات كاملة، وتقارير متطابقة، ومعالجة لأحداث التكرار والفقد والتوقف.
+- نتائج Security/Performance/Recovery/Interoperability موثقة قبل السماح بالتشغيل الفعلي.
+
+## 11. وثائق المشروع والحالة
+
+- [Native SIP architecture and technical requirements](docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md)
+- [Codebase cleanup audit / release risks](docs/CODEBASE_CLEANUP_AUDIT.md)
+- [GitHub development repository](https://github.com/SamoTech/SamoQueue)
+
+**الخلاصة:** QueuePilot ليس إضافة على Avaya، بل نواة مركز اتصال مستقل. **دور Avaya يقتصر على تسليم مكالمات SIP الواردة**؛ لكن **النسخة الحالية v0.7 لا تزال أساسًا معمليًا**. التوثيق يفرق بين ما نجح محليًا وما نعمل للوصول إليه، حتى لا تُعرَّض مكالمات أو بيانات حقيقية للخطر.
