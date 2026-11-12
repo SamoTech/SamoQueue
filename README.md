@@ -1,6 +1,6 @@
 # QueuePilot — Independent Contact Center Platform
 
-**الإصدار الحالي: v1.1 (Native SIP + Voice IVR + Single WAV + Approved Live Listen Lab) — مرحلة تطوير واختبار، غير جاهز للإنتاج.**
+**الإصدار الحالي: v1.2 (Native SIP + Voice IVR + Single WAV + Live Listen + Codebase Cleanup Lab) — مرحلة تطوير واختبار، غير جاهز للإنتاج.**
 
 > **الرؤية الأساسية:** Avaya Aura/Communication Manager تستقبل المكالمات من شبكة الاتصالات وتُسلّمها إلى QueuePilot عبر **SIP Trunk** فقط. بعد التسليم، **QueuePilot هو المسؤول الوحيد عن منطق مركز الاتصال**: استقبال جلسات SIP، الـIVR، اختيار الـQueue، توزيع المكالمات (ACD)، الاتصال بتليفونات الموظفين، مرور الصوت (RTP)، التسجيل، متابعة المشرفين والتقارير.
 >
@@ -162,7 +162,7 @@ python -m venv .venv
 source .venv/bin/activate
 # Windows PowerShell:
 # .venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 python setup_demo.py
 python run.py
 ```
@@ -207,7 +207,7 @@ python -m compileall -q app telephony tests
 node --check app/static/app.js
 ```
 
-**التحقق الأخير لهذه الوثيقة:** 52 اختبار Python محلي ناجح على v1.1. لا يعني ذلك أن GitHub Actions نجح أو أن Avaya الحقيقية اختُبرت.
+**التحقق الأخير لهذه الوثيقة:** تمت مراجعة الكود وإعادة اختبارات Python وJavaScript في v1.2. لا يعني ذلك أن GitHub Actions نجح أو أن Avaya الحقيقية اختُبرت.
 
 ## 8. واجهات الـAPI الرئيسية
 
@@ -269,10 +269,10 @@ node --check app/static/app.js
 ## 11. وثائق المشروع والحالة
 
 - [Native SIP architecture and technical requirements](docs/NATIVE_SIP_CALLCENTER_ARCHITECTURE.md)
-- [Codebase cleanup audit / release risks](docs/CODEBASE_CLEANUP_AUDIT.md)
+- [Codebase cleanup audit / release risks — v1.2](docs/CODEBASE_CLEANUP_AUDIT.md)
 - [GitHub development repository](https://github.com/SamoTech/SamoQueue)
 
-**الخلاصة:** QueuePilot ليس إضافة على Avaya، بل نواة مركز اتصال مستقل. **دور Avaya يقتصر على تسليم مكالمات SIP الواردة**؛ لكن **النسخة الحالية v0.9 لا تزال أساسًا معمليًا**. التوثيق يفرق بين ما نجح محليًا وما نعمل للوصول إليه، حتى لا تُعرَّض مكالمات أو بيانات حقيقية للخطر.
+**الخلاصة:** QueuePilot ليس إضافة على Avaya، بل نواة مركز اتصال مستقل. **دور Avaya يقتصر على تسليم مكالمات SIP الواردة**؛ لكن **النسخة الحالية v1.2 لا تزال أساسًا معمليًا**. التوثيق يفرق بين ما نجح محليًا وما نعمل للوصول إليه، حتى لا تُعرَّض مكالمات أو بيانات حقيقية للخطر.
 
 
 ## 10. Voice IVR الفعلي داخل QueuePilot — v1.0 (معملي)

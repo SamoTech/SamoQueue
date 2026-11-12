@@ -60,9 +60,9 @@
         <div class="mini-stats" id="agentMiniStats"></div><div class="panel"><div class="panel-head"><div><h2>Agent directory</h2><p>Manual directory status updates do not yet control the SIP runtime</p></div></div><div class="table-scroll"><table><thead><tr><th>AGENT</th><th>EXTENSION</th><th>ASSIGNED QUEUE</th><th>STATUS</th><th>LAST CHANGE</th><th>LOCAL EDIT</th></tr></thead><tbody id="agentRows"></tbody></table></div></div></section>
       <section id="page-recordings" class="page" hidden>
         <div class="page-top"><div><div class="eyebrow purple">QUALITY & COMPLIANCE</div><h1>Call recordings<span class="dot">.</span></h1>
-          <p>Find and play captured calls. Native RTP recordings will be indexed here after the media-engine link is implemented.</p></div>
+          <p>Find and play recordings. Opt-in native RTP capture archives one stereo WAV per call in the isolated lab.</p></div>
           <button id="reloadRecordings" class="ghost">⟳ Refresh</button></div>
-        <div class="demo-banner" style="display:block">Playback is available for authenticated native-media imports. Automatic RTP recording-to-library integration is not yet completed.</div>
+        <div class="demo-banner" style="display:block">Lab only: recording is OFF by default. When separately enabled with an approved notice policy, native RTP can archive a single stereo WAV. No real Avaya or production approval.</div>
         <div class="panel"><div class="panel-head"><div><h2>Recording library</h2><p>Supervisor playback and downloads are audited</p></div></div>
           <div class="table-scroll"><table><thead><tr><th>RECORDED</th><th>CALL</th><th>QUEUE</th><th>AGENT</th><th>DURATION</th><th>SIZE</th><th>ACTIONS</th></tr></thead>
              <tbody id="recordingRows"></tbody></table></div>
@@ -73,7 +73,7 @@
         <div class="page-top"><div><div class="eyebrow purple">SUPERVISOR QUALITY</div><h1>Live listening<span class="dot">.</span></h1>
          <p>Authorized supervisor access to QueuePilot native media, subject to approval.</p></div>
          <button id="reloadMonitoring" class="ghost">⟳ Refresh</button></div>
-        <div class="demo-banner" style="display:block">Monitoring is disabled by default. The native media mixer and runtime approval path must be integrated and verified before live listening.</div>
+        <div class="demo-banner" style="display:block">Lab only: monitoring is OFF by default. Approved monitoring can stream native RTP audio via the opt-in local observer; no production or Avaya handset validation.</div>
         <div class="panel"><div class="panel-head"><div><h2>Listen requests</h2><p>Administrator requests; independent reviewer approves; native media engine must activate listening</p></div></div>
           <div class="table-scroll"><table><thead><tr><th>CALL</th><th>AGENT</th><th>EXTENSION</th><th>REQUESTED</th><th>STATE</th><th>ACTIONS</th></tr></thead>
              <tbody id="monitorRows"></tbody></table></div>
@@ -121,7 +121,7 @@
             <div class="diag-row"><span>Last event received</span><strong id="lastEvent">Never</strong></div>
             <div class="diag-row"><span>Native engine reported healthy</span><strong class="warning">No</strong></div>
             <div class="diag-row"><span>Mode</span><strong id="appMode">--</strong></div>
-            <div class="hint">The embedded SIP runtime should send normalized events to <code>POST /api/engine/events</code> with an internal engine key. This integration is still pending.</div>
+            <div class="hint">In the isolated single-host lab, use <code>--local-events</code> to write native call events to the dashboard database, or the authenticated engine event API. Neither route provides production-grade recovery.</div>
           </div></div></section>
     </div>
   </main>

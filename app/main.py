@@ -7,11 +7,10 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from .config import config, validate_config
+from .config import APP_VERSION, config, validate_config
 from .db import connection, init_db
 from .models import AgentIn, AgentStatusIn, EngineEvent, EngineHeartbeat, Login, QueueIn
 from .security import encode_token, require_admin, require_engine_event, require_supervisor
@@ -24,7 +23,7 @@ async def lifespan(app: FastAPI):
     init_db()
     yield
 
-app = FastAPI(title='QueuePilot Independent Contact Center', version='0.9.0-lab', lifespan=lifespan,
+app = FastAPI(title='QueuePilot Independent Contact Center', version=APP_VERSION, lifespan=lifespan,
               description='Independent QueuePilot SIP/ACD laboratory architecture; no AES/WTI management APIs. Not production-ready.')
 app.include_router(contact_center_router)
 static_root = Path(__file__).parent / 'static'
@@ -36,7 +35,7 @@ def index():
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': '0.9.0-lab'}
+    return {'status': 'ok', 'demo_mode': config.demo_mode, 'version': APP_VERSION}
 
 # Single administrator for development/MVP. Use enterprise SSO and proper RBAC in production.
 login_attempts = {}

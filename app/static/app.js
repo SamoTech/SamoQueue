@@ -104,7 +104,7 @@ $('modalForm').onsubmit=async e=>{e.preventDefault();$('modalError').textContent
  try{if(modalKind==='queue'){data.sla_seconds=Number(data.sla_seconds);data.target_percent=Number(data.target_percent);data.enabled=data.enabled==='true';await api(modalId?'/queues/'+modalId:'/queues',{method:modalId?'PUT':'POST',body:JSON.stringify(data)});}else if(modalKind==='agent'){data.queue_id=data.queue_id||null;await api('/agents',{method:'POST',body:JSON.stringify(data)});}else if(modalKind==='status'){await api('/agents/'+modalId+'/status',{method:'PATCH',body:JSON.stringify(data)});} $('modal').close();flash('Saved successfully');refresh();}catch(err){$('modalError').textContent=err.message;}};
 
 
-// Contact center operations v0.3: recorder-backed audio, audited supervisor monitoring, IVR planning and exports.
+// QueuePilot lab: one stereo WAV, approved RTP listening, IVR drafts and reports.
 let recordingBlobUrl=null;
 let monitoringSocket=null;
 let monitorAudioContext=null;
@@ -140,7 +140,7 @@ async function loadRecordings(){
       <td>${escapeHtml(r.agent_name||'—')}</td><td>${duration(r.duration_seconds)}</td>
       <td>${(r.bytes/1024/1024).toFixed(1)} MB</td>
       <td><button class="small-button" data-play="${escapeHtml(r.id)}">Play</button>
-      <button class="small-button" data-download="${escapeHtml(r.id)}">↓</button></td></tr>`).join(''):emptyRow(7,'No recordings yet. An authorized recorder must send a WAV/MP3/OGG call recording.');
+      <button class="small-button" data-download="${escapeHtml(r.id)}">↓</button></td></tr>`).join(''):emptyRow(7,'No recordings indexed yet. Native RTP capture requires explicit lab opt-in and an approved notice policy.');
     document.querySelectorAll('[data-play]').forEach(b=>b.onclick=()=>{
       const r=data.recordings.find(x=>x.id===b.dataset.play);if(r)playRecording(r.id,r.original_name);
     });

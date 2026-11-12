@@ -3,8 +3,9 @@ IVR drafts, and independently exportable event-derived reports.
 
 The native SIP/RTP runtime can archive ONE *lab-only* stereo WAV after
 call completion when explicitly enabled and notice policy is acknowledged.
-IVR execution and supervisor mixing are NOT connected to live media yet.
-These APIs are not proof of production recording, listening, or IVR playback.
+Native RTP recording, local voice IVR and approved live listening have
+lab-only integration paths. Dashboard IVR drafts are NOT published to the
+SIP runtime. Nothing here certifies real Avaya hardware or production use.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, model_validator
 
 from .audit import audit

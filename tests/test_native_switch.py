@@ -11,7 +11,8 @@ import pytest
 from telephony.native_sip import IngressRoute
 from telephony.native_switch import Config, NativeSwitch
 from telephony.sip_stack import RegistrarAuth, SipError, MediaAddress, parse_message, parse_sdp, packet, response, sdp_offer
-from telephony.rtp_media import RtpRelay, decode_ulaw, decode_alaw
+from telephony.rtp_media import RtpRelay
+from telephony.stereo_recording import decode_ulaw, decode_alaw
 
 
 def request(method,uri,call_id,cseq,from_header,to_header,additional=None,body=b''):
